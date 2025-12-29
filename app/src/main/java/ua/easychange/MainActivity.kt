@@ -167,7 +167,7 @@ class MainActivity : ComponentActivity() {
 
                 listOf("EUR", "PLN", "UAH").forEach {
                     val v = convert(amount.toDoubleOrNull() ?: 0.0, "USD", it, rates)
-                    Text("$it  ${"%.2f".format(v)}")
+                    Text("$it  ${String.format(Locale.US, "%.2f", v)}")
                 }
 
                 Spacer(Modifier.height(12.dp))
