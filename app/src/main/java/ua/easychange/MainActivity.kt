@@ -94,36 +94,32 @@ class MainActivity : ComponentActivity() {
             val scope = rememberCoroutineScope()
 
             fun refresh(){
-                scope.launch {
-                    rates = when(source){
-                        "KURS" -> kurs.load().data.map{
-                            Fx(it.base,it.quote,it.buy,it.sell,(it.buy+it.sell)/2)
-                        }
-                        "MONO" -> mono.load().mapNotNull{
-                            val b=it.code(it.currencyCodeA)
-                            val q=it.code(it.currencyCodeB)
-                            if(b!=null && q=="UAH")
-                                Fx(b,q,it.rateBuy,it.rateSell,
-                                    it.rateCross?:((it.rateBuy!!+it.rateSell!!)/2))
-                            else null
-                        }
-                        else -> nbu.load().map{
-                            Fx(it.cc,"UAH",null,null,it.rate)
-                        }
-                    }
-                    btc = binance.btc().price.toDouble()
+    scope.launch {
+        try {
+            rates = when(source){
+                "KURS" -> kurs.load().data.map {
+                    Fx(it.base,it.quote,it.buy,it.sell,(it.buy+it.sell)/2)
+                }
+                "MONO" -> mono.load().mapNotNull {
+                    val b = it.code(it.currencyCodeA)
+                    val q = it.code(it.currencyCodeB)
+                    if (b != null && q == "UAH")
+                        Fx(b,q,it.rateBuy,it.rateSell,
+                           it.rateCross ?: ((it.rateBuy!! + it.rateSell!!) / 2))
+                    else null
+                }
+                else -> nbu.load().map {
+                    Fx(it.cc,"UAH",null,null,it.rate)
                 }
             }
 
-            LaunchedEffect(source){ refresh() }
+            btc = binance.btc().price.toDouble()
 
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp)) {
-
-                Row {
-                    listOf("KURS","MONO","NBU").forEach {
-                        Button(onClick={source=it}){ Text(it) }
-                    }
-                }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
 
                 OutlinedTextField(amount,{amount=it},label={Text("USD")})
 
