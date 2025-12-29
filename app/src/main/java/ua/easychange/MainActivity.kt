@@ -166,8 +166,10 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(Modifier.height(8.dp))
 
-                listOf("EUR", "PLN", "UAH").forEach {
-                    val v = convert(amount.toDoubleOrNull() ?: 0.0, "USD", it, rates)
+                listOf("EUR","PLN","UAH").forEach {
+                    val v =
+                        if (rates.isEmpty()) 0.0
+                        else convert(amount.toDoubleOrNull() ?: 0.0, "USD", it, rates)
                     Text("$it  ${String.format(Locale.US, "%.2f", v)}")
                 }
 
