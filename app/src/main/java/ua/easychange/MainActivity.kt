@@ -86,52 +86,90 @@ class MainActivity : ComponentActivity() {
             .addConverterFactory(GsonConverterFactory.create()).build()
             .create(BinanceApi::class.java)
 
-        setContent {
-            var source by remember { mutableStateOf("KURS") }
-            var amount by remember { mutableStateOf("100") }
-            var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
-            var btc by remember { mutableStateOf<Double?>(null) }
-            val scope = rememberCoroutineScope()
+setContent {
 
-            fun refresh(){
-    scope.launch {
-        try {
-            rates = when(source){
-                "KURS" -> kurs.load().data.map {
-                    Fx(it.base,it.quote,it.buy,it.sell,(it.buy+it.sell)/2)
+    var source by remember { mutableStateOf("KURS") }
+    var amount by remember { mutableStateOf("100") }
+    var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
+    var btc by remember { mutableStateOf<Double?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun refresh() {
+        scope.launch {
+            try {
+                rates = when (source) {
+                    "KURS" -> kurs.load().data.map {
+                        Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
+                    }
+
+                    "MONO" -> mono.load().mapNotNull {
+                        val b = it.code(it.currencyCodeA)
+                        val q = it.code(it.currencyCodeB)
+                        if (b != null && q == "UAH")
+                            Fx(
+                                b, q,
+                                it.rateBuy, it.rateSell,
+                                it.rateCross ?: ((it.rateBuy!! + it.rateSell!!) / 2)
+                            )
+                        else null
+                    }
+
+                    else -> nbu.load().map {
+                        Fx(it.cc, "UAH", null, null, it.rate)
+                    }
                 }
-                "MONO" -> mono.load().mapNotNull {
-                    val b = it.code(it.currencyCodeA)
-                    val q = it.code(it.currencyCodeB)
-                    if (b != null && q == "UAH")
-                        Fx(b,q,it.rateBuy,it.rateSell,
-                           it.rateCross ?: ((it.rateBuy!! + it.rateSell!!) / 2))
-                    else null
-                }
-                else -> nbu.load().map {
-                    Fx(it.cc,"UAH",null,null,it.rate)
-                }
+
+                btc = binance.btc().price.toDouble()
+
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-
-            btc = binance.btc().price.toDouble()
-
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
-}
 
-                OutlinedTextField(amount,{amount=it},label={Text("USD")})
+    LaunchedEffect(source) { refresh() }
 
-                listOf("EUR","PLN","UAH").forEach {
-                    val v=convert(amount.toDoubleOrNull()?:0.0,"USD",it,rates)
-                    Text("$it  ${"%.2f".format(v)}")
+    Column(
+        Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(12.dp)
+    ) {
+
+        // Source selector
+        Row {
+            listOf("KURS", "MONO", "NBU").forEach {
+                Button(
+                    onClick = { source = it },
+                    modifier = Modifier.padding(end = 4.dp)
+                ) {
+                    Text(it)
                 }
-
-                Spacer(Modifier.height(8.dp))
-                Text("BTC → USD  ${btc ?: "--"}")
-                Button(onClick={refresh()}){ Text("⟳") }
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = amount,
+            onValueChange = { amount = it },
+            label = { Text("USD") }
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        listOf("EUR", "PLN", "UAH").forEach {
+            val v = convert(amount.toDoubleOrNull() ?: 0.0, "USD", it, rates)
+            Text("$it  ${"%.2f".format(v)}")
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Text("BTC → USD  ${btc ?: "--"}")
+
+        Spacer(Modifier.height(8.dp))
+
+        Button(onClick = { refresh() }) {
+            Text("⟳")
         }
     }
 }
