@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">EasyChange</string>
+    <string name="refresh">Оновити</string>
+    <string name="compare">Порівняння</string>
+</resources>
