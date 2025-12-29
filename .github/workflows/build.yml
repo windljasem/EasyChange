@@ -1,0 +1,31 @@
+name: Build EasyChange APK
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x ./gradlew || true
+
+    - name: Build APK
+      run: ./gradlew assembleDebug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: EasyChange-debug
+        path: app/build/outputs/apk/debug/*.apk
