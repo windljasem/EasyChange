@@ -39,7 +39,7 @@ data class KursResponse(val data: List<KursDto>)
 data class KursDto(val base: String, val quote: String, val buy: Double, val sell: Double)
 
 interface KursHtmlApi {
-    @GET("currency/nbu/")
+    @GET("currency/")
     suspend fun loadHtml(): String
 }
 
@@ -73,14 +73,9 @@ interface MinfinApi {
 }
 
 interface MinfinJsonApi {
-    @GET("data/currency/cash/")
-    suspend fun load(): MinfinResponse
+    @GET("ua/currency/banks/usd/")
+    suspend fun loadHtml(): String
 }
-data class MinfinResponse(val data: Map<String, MinfinCurrency>)
-data class MinfinCurrency(
-    val ask: String? = null,
-    val bid: String? = null
-)
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
@@ -99,7 +94,8 @@ val CURRENCIES = listOf(
     CurrencyInfo("CHF", "🇨🇭", "Франк"),
     CurrencyInfo("CZK", "🇨🇿", "Крона"),
     CurrencyInfo("BGN", "🇧🇬", "Лев"),
-    CurrencyInfo("CAD", "🇨🇦", "Дол. Канади")
+    CurrencyInfo("CAD", "🇨🇦", "Дол. Канади"),
+    CurrencyInfo("BTC", "₿", "Bitcoin")
 )
 
 // ------------------ UTILS ------------------
@@ -140,21 +136,45 @@ fun parseMinfinJson(data: Map<String, MinfinCurrency>): List<Fx> {
     return rates
 }
 
+fun parseMinfinBanksHtml(html: String): List<Fx> {
+    val rates = mutableListOf<Fx>()
+    
+    try {
+        // Шукаємо середній курс USD
+        val avgRegex = """Середній курс[\s\S]*?<div[^>]*class="[^"]*mfcur-table-avg[^"]*"[^>]*>[\s\S]*?<div[^>]*>([\d.]+)</div>[\s\S]*?<div[^>]*>([\d.]+)</div>""".toRegex()
+        val match = avgRegex.find(html)
+        
+        if (match != null) {
+            val buy = match.groupValues[1].toDoubleOrNull()
+            val sell = match.groupValues[2].toDoubleOrNull()
+            
+            if (buy != null && sell != null && buy > 0 && sell > 0) {
+                rates.add(Fx("USD", "UAH", buy, sell, (buy + sell) / 2))
+                Log.d("EasyChange", "Minfin banks: USD -> UAH = $buy/$sell")
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("EasyChange", "Minfin banks parsing error: ${e.message}")
+    }
+    
+    return rates
+}
+
 fun parseKursHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
     try {
-        // Парсимо таблицю курсів
-        val rowRegex = """<tr[^>]*>[\s\S]*?<td[^>]*>([A-Z]{3})</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?</tr>""".toRegex()
+        // Шукаємо таблицю з курсами валют
+        val tableRegex = """<div[^>]*class="[^"]*currency_block[^"]*"[^>]*>[\s\S]*?<div[^>]*>([A-Z]{3})</div>[\s\S]*?<div[^>]*>([\d.]+)</div>[\s\S]*?<div[^>]*>([\d.]+)</div>""".toRegex()
         
-        rowRegex.findAll(html).forEach { match ->
+        tableRegex.findAll(html).forEach { match ->
             val code = match.groupValues[1]
             val buy = match.groupValues[2].toDoubleOrNull()
             val sell = match.groupValues[3].toDoubleOrNull()
             
-            if (code in CURRENCIES.map { it.code } && buy != null && sell != null && buy > 0 && sell > 0) {
+            if (code in listOf("USD", "EUR", "PLN") && buy != null && sell != null && buy > 0 && sell > 0) {
                 rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                Log.d("EasyChange", "Kurs HTML: $code -> UAH = $buy/$sell")
+                Log.d("EasyChange", "Kurs: $code -> UAH = $buy/$sell")
             }
         }
     } catch (e: Exception) {
@@ -378,10 +398,10 @@ fun MainScreen(
 
                         "INTERBANK" -> {
                             try {
-                                val response = minfinJson.load()
-                                Log.d("EasyChange", "MINFIN JSON loaded: ${response.data.size} currencies")
+                                val html = minfinJson.loadHtml()
+                                Log.d("EasyChange", "MINFIN HTML loaded: ${html.length} chars")
                                 
-                                val parsed = parseMinfinJson(response.data)
+                                val parsed = parseMinfinBanksHtml(html)
                                 Log.d("EasyChange", "MINFIN parsed: ${parsed.size} rates")
                                 
                                 if (parsed.isEmpty()) {
@@ -407,6 +427,12 @@ fun MainScreen(
                     try {
                         val btcResponse = binance.btc()
                         btc = btcResponse.price.toDoubleOrNull()
+                        
+                        // Додаємо BTC до курсів якщо він є
+                        if (btc != null && btc!! > 0) {
+                            rates = rates + Fx("BTC", "USD", null, null, btc!!)
+                            Log.d("EasyChange", "BTC added: $btc USD")
+                        }
                     } catch (e: Exception) {
                         Log.e("EasyChange", "BTC error: ${e.message}", e)
                         btc = null
@@ -601,33 +627,14 @@ fun MainScreen(
                             color = if (value != null) 
                                 MaterialTheme.colorScheme.onSurface 
                             else 
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = if (value != null) 16.sp else 12.sp
                         )
                     }
                 }
             }
         } else if (!isLoading) {
             Text("Дані не завантажено", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // BTC курс
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("BTC → USD", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    text = btc?.let { String.format(Locale.US, "%.2f", it) } ?: "--",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-            }
         }
 
         Spacer(Modifier.height(12.dp))
