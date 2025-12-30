@@ -113,29 +113,6 @@ fun MonoDto.code(i: Int) = when (i) {
     else -> null
 }
 
-fun parseMinfinJson(data: Map<String, MinfinCurrency>): List<Fx> {
-    val rates = mutableListOf<Fx>()
-    
-    try {
-        data.forEach { (code, curr) ->
-            if (code in listOf("usd", "eur", "pln", "gbp", "chf", "czk", "cad")) {
-                val ask = curr.ask?.toDoubleOrNull()
-                val bid = curr.bid?.toDoubleOrNull()
-                
-                if (ask != null && bid != null && ask > 0 && bid > 0) {
-                    val currCode = code.uppercase()
-                    rates.add(Fx(currCode, "UAH", bid, ask, (bid + ask) / 2))
-                    Log.d("EasyChange", "Minfin: $currCode -> UAH = $bid/$ask")
-                }
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("EasyChange", "Minfin JSON parsing error: ${e.message}")
-    }
-    
-    return rates
-}
-
 fun parseMinfinBanksHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
