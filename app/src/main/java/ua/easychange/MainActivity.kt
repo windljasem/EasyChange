@@ -4,19 +4,17 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import java.util.Locale
-import androidx.compose.ui.unit.sp
 
 // ------------------ MODELS ------------------
 data class Fx(val base: String, val quote: String, val buy: Double?, val sell: Double?, val mid: Double)
@@ -101,110 +99,219 @@ class MainActivity : ComponentActivity() {
             .create(BinanceApi::class.java)
 
         setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    MainScreen(kurs, mono, nbu, binance)
+                }
+            }
+        }
+    }
+}
 
-            var source by remember { mutableStateOf("KURS") }
-            var amount by remember { mutableStateOf("100") }
-            var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
-            var btc by remember { mutableStateOf<Double?>(null) }
-            val scope = rememberCoroutineScope()
+@Composable
+fun MainScreen(
+    kurs: KursApi,
+    mono: MonoApi,
+    nbu: NbuApi,
+    binance: BinanceApi
+) {
+    var source by remember { mutableStateOf("KURS") }
+    var amount by remember { mutableStateOf("100") }
+    var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
+    var btc by remember { mutableStateOf<Double?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
-            fun refresh() {
-                scope.launch {
-                    try {
-                        rates = when (source) {
-
-                            "KURS", "INTERBANK" -> {
-                                kurs.load().data.map {
-                                    Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
-                                }
-                            }
-
-                            "MONO" -> {
-                                mono.load().mapNotNull {
-                                    val b = it.code(it.currencyCodeA)
-                                    val q = it.code(it.currencyCodeB)
-
-                                    if (b != null && q == "UAH" && it.rateCross != null) {
-                                        Fx(b, q, null, null, it.rateCross)
-                                    } else null
-                                }
-                            }
-
-                            else -> {
-                                nbu.load()
-                                    .filter { it.cc in listOf("USD","EUR","PLN","GBP","CHF","CAD","CZK","BGN","HRK") }
-                                    .map {
-                                        Fx(it.cc, "UAH", null, null, it.rate)
-                                    }
-                            }
+    fun refresh() {
+        scope.launch {
+            isLoading = true
+            errorMessage = null
+            try {
+                rates = when (source) {
+                    "KURS", "INTERBANK" -> {
+                        kurs.load().data.map {
+                            Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
                         }
+                    }
 
-                        btc = binance.btc().price.toDouble()
+                    "MONO" -> {
+                        mono.load().mapNotNull {
+                            val b = it.code(it.currencyCodeA)
+                            val q = it.code(it.currencyCodeB)
+                            if (b != null && q == "UAH") {
+                                val mid = it.rateCross ?: ((it.rateBuy ?: 0.0) + (it.rateSell ?: 0.0)) / 2
+                                if (mid > 0) Fx(b, q, it.rateBuy, it.rateSell, mid) else null
+                            } else null
+                        }
+                    }
 
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    "NBU" -> {
+                        nbu.load()
+                            .filter { it.cc in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CAD", "CZK", "BGN", "HRK") }
+                            .map {
+                                Fx(it.cc, "UAH", null, null, it.rate)
+                            }
+                    }
+
+                    else -> emptyList()
+                }
+
+                btc = binance.btc().price.toDoubleOrNull()
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                errorMessage = "Помилка: ${e.message}"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(source) { refresh() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Кнопки джерел
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                "KURS" to "kurs.com.ua",
+                "MONO" to "monobank.ua",
+                "NBU" to "bank.gov.ua"
+            ).forEach { (code, url) ->
+                Button(
+                    onClick = { source = code },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (source == code) 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Column(
+                        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                    ) {
+                        Text(code, fontSize = 14.sp)
+                        Text(url, fontSize = 8.sp)
                     }
                 }
             }
+        }
 
-            LaunchedEffect(source) { refresh() }
+        Spacer(Modifier.height(16.dp))
 
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(12.dp)
+        // Поле введення
+        OutlinedTextField(
+            value = amount,
+            onValueChange = { newValue ->
+                // Дозволяємо тільки цифри і крапку
+                if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                    amount = newValue
+                }
+            },
+            label = { Text("USD") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        // Показ помилки
+        errorMessage?.let {
+            Text(
+                text = it,
+                color = MaterialTheme.colorScheme.error,
+                fontSize = 12.sp
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Індикатор завантаження
+        if (isLoading) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Конвертовані валюти
+        val amountDouble = amount.toDoubleOrNull() ?: 0.0
+        val hasUsd = rates.any { it.base == "USD" || it.quote == "USD" }
+        val hasUah = rates.any { it.quote == "UAH" || it.base == "UAH" }
+
+        if (rates.isNotEmpty()) {
+            listOf("EUR", "PLN", "UAH").forEach { code ->
+                val value = try {
+                    if (!hasUsd || !hasUah || amountDouble == 0.0) {
+                        0.0
+                    } else {
+                        convert(amountDouble, "USD", code, rates)
+                    }
+                } catch (e: Exception) {
+                    0.0
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = code,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = String.format(Locale.US, "%.2f", value),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // BTC курс
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-
-                Row {
-                    listOf(
-                        "KURS" to "kurs.com.ua",
-                        "MONO" to "monobank.ua",
-                        "NBU" to "bank.gov.ua",
-                        "INTERBANK" to "minfin.com.ua"
-                    ).forEach { (code, url) ->
-                        Button(
-                            onClick = { source = code },
-                            modifier = Modifier.padding(end = 6.dp)
-                        ) {
-                            Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                                Text(code)
-                                Text(url, fontSize = 10.sp)
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = amount,
-                    onValueChange = { amount = it },
-                    label = { Text("USD") }
+                Text("BTC → USD", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = btc?.let { String.format(Locale.US, "%.2f", it) } ?: "--",
+                    style = MaterialTheme.typography.bodyLarge
                 )
-
-                Spacer(Modifier.height(8.dp))
-
-                val hasUsd = rates.any { it.base == "USD" }
-                val hasUah = rates.any { it.quote == "UAH" }
-
-                listOf("EUR", "PLN", "UAH").forEach { code ->
-                    val v =
-                        if (!hasUsd || !hasUah) 0.0
-                        else convert(amount.toDoubleOrNull() ?: 0.0, "USD", code, rates)
-
-                    Text("$code  ${String.format(Locale.US, "%.2f", v)}")
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                Text("BTC → USD  ${btc ?: "--"}")
-
-                Spacer(Modifier.height(8.dp))
-
-                Button(onClick = { refresh() }) {
-                    Text("⟳")
-                }
             }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Кнопка оновлення
+        Button(
+            onClick = { refresh() },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isLoading
+        ) {
+            Text("Оновити ⟳")
         }
     }
 }
