@@ -39,7 +39,7 @@ data class KursResponse(val data: List<KursDto>)
 data class KursDto(val base: String, val quote: String, val buy: Double, val sell: Double)
 
 interface KursHtmlApi {
-    @GET("currency/")
+    @GET("currency/auction/")
     suspend fun loadHtml(): String
 }
 
@@ -73,7 +73,7 @@ interface MinfinApi {
 }
 
 interface MinfinJsonApi {
-    @GET("ua/currency/banks/usd/")
+    @GET("ua/currency/mb/")
     suspend fun loadHtml(): String
 }
 
@@ -117,21 +117,21 @@ fun parseMinfinBanksHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
     try {
-        // Шукаємо середній курс USD
-        val avgRegex = """Середній курс[\s\S]*?<div[^>]*class="[^"]*mfcur-table-avg[^"]*"[^>]*>[\s\S]*?<div[^>]*>([\d.]+)</div>[\s\S]*?<div[^>]*>([\d.]+)</div>""".toRegex()
-        val match = avgRegex.find(html)
+        // Шукаємо курси валют у НБУ секції Minfin
+        val currencyRegex = """data-currency="([A-Z]{3})"[\s\S]*?<td[^>]*data-title="Купівля"[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*data-title="Продаж"[^>]*>([\d.]+)</td>""".toRegex()
         
-        if (match != null) {
-            val buy = match.groupValues[1].toDoubleOrNull()
-            val sell = match.groupValues[2].toDoubleOrNull()
+        currencyRegex.findAll(html).forEach { match ->
+            val code = match.groupValues[1]
+            val buy = match.groupValues[2].toDoubleOrNull()
+            val sell = match.groupValues[3].toDoubleOrNull()
             
-            if (buy != null && sell != null && buy > 0 && sell > 0) {
-                rates.add(Fx("USD", "UAH", buy, sell, (buy + sell) / 2))
-                Log.d("EasyChange", "Minfin banks: USD -> UAH = $buy/$sell")
+            if (code in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK") && buy != null && sell != null && buy > 0 && sell > 0) {
+                rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
+                Log.d("EasyChange", "Minfin: $code -> UAH = $buy/$sell")
             }
         }
     } catch (e: Exception) {
-        Log.e("EasyChange", "Minfin banks parsing error: ${e.message}")
+        Log.e("EasyChange", "Minfin parsing error: ${e.message}")
     }
     
     return rates
@@ -141,15 +141,15 @@ fun parseKursHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
     try {
-        // Шукаємо таблицю з курсами валют
-        val tableRegex = """<div[^>]*class="[^"]*currency_block[^"]*"[^>]*>[\s\S]*?<div[^>]*>([A-Z]{3})</div>[\s\S]*?<div[^>]*>([\d.]+)</div>[\s\S]*?<div[^>]*>([\d.]+)</div>""".toRegex()
+        // Шукаємо таблицю міжбанку з класом auction-table
+        val rowRegex = """<tr[^>]*>[\s\S]*?<td[^>]*>([A-Z]{3})</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
         
-        tableRegex.findAll(html).forEach { match ->
+        rowRegex.findAll(html).forEach { match ->
             val code = match.groupValues[1]
             val buy = match.groupValues[2].toDoubleOrNull()
             val sell = match.groupValues[3].toDoubleOrNull()
             
-            if (code in listOf("USD", "EUR", "PLN") && buy != null && sell != null && buy > 0 && sell > 0) {
+            if (code in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK") && buy != null && sell != null && buy > 0 && sell > 0) {
                 rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
                 Log.d("EasyChange", "Kurs: $code -> UAH = $buy/$sell")
             }
@@ -278,7 +278,7 @@ fun MainScreen(
 ) {
     var source by remember { mutableStateOf("KURS") }
     var baseCurrency by remember { mutableStateOf("USD") }
-    var amount by remember { mutableStateOf("100") }
+    var amount by remember { mutableStateOf("1") }
     var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
     var btc by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
@@ -430,9 +430,12 @@ fun MainScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
     ) {
-        // Кнопки джерел
+        // Верхня частина (кнопки + поле) - не скролиться
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+        // Кнопки джерел - 2 ряди по 2
         Column(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -565,6 +568,15 @@ fun MainScreen(
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+
+        // Скроліться список валют
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+        ) {
 
         // Конвертовані валюти
         val amountDouble = amount.toDoubleOrNull() ?: 0.0
@@ -624,6 +636,9 @@ fun MainScreen(
         ) {
             Text(if (isLoading) "Завантаження..." else "Оновити ⟳")
         }
+        
+        Spacer(Modifier.height(16.dp))
+    }
     }
 
     // Діалог вибору валюти
