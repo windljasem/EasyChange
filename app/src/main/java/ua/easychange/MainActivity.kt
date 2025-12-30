@@ -101,6 +101,9 @@ class MainActivity : ComponentActivity() {
             .create(BinanceApi::class.java)
 
         setContent {
+            CompositionLocalProvider(
+                androidx.compose.foundation.LocalOverscrollConfiguration provides null
+            ) {    
 
             var source by remember { mutableStateOf("KURS") }
             var amount by remember { mutableStateOf("100") }
