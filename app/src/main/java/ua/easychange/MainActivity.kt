@@ -95,7 +95,7 @@ data class ExchangeRateResponse(
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
-    suspend fun btc(@Query("symbol") s: String = "BTCUSDT"): BinanceDto
+    suspend fun getPrice(@Query("symbol") s: String): BinanceDto
 }
 
 data class BinanceDto(val price: String)
@@ -110,8 +110,7 @@ val CURRENCIES = listOf(
     CurrencyInfo("CHF", "🇨🇭", "Франк"),
     CurrencyInfo("CZK", "🇨🇿", "Крона"),
     CurrencyInfo("CAD", "🇨🇦", "Дол. Канади"),
-    CurrencyInfo("CNY", "🇨🇳", "Юань"),
-    CurrencyInfo("BTC", "₿", "Bitcoin")
+    CurrencyInfo("CNY", "🇨🇳", "Юань")
 )
 
 // ------------------ UTILITY FUNCTIONS ------------------
@@ -244,16 +243,27 @@ fun MainScreen(
     var baseCurrency by remember { mutableStateOf("USD") }
     var amount by remember { mutableStateOf("1") }
     var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
+    var btcPrice by remember { mutableStateOf<Double?>(null) }
+    var ethPrice by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
+    var lastRefreshTime by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
 
     fun refresh() {
+        // Захист від часих оновлень (мінімум 10 секунд між запитами)
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastRefreshTime < 10000) {
+            errorMessage = "Зачекайте 10 секунд перед наступним оновленням"
+            return
+        }
+        
         scope.launch {
             isLoading = true
             errorMessage = null
+            lastRefreshTime = currentTime
             
             withContext(Dispatchers.IO) {
                 try {
@@ -338,15 +348,23 @@ fun MainScreen(
                         else -> emptyList()
                     }
 
-                    // Додаємо BTC
+                    // Додаємо BTC та ETH
                     try {
-                        val btcPrice = binance.btc().price.toDoubleOrNull()
-                        if (btcPrice != null && btcPrice > 0) {
-                            rates = rates + Fx("BTC", "USD", null, null, btcPrice)
-                            Log.d("EasyChange", "BTC: $btcPrice USD")
-                        }
+                        val btcResponse = binance.getPrice("BTCUSDT")
+                        btcPrice = btcResponse.price.toDoubleOrNull()
+                        Log.d("EasyChange", "BTC: $btcPrice USD")
                     } catch (e: Exception) {
                         Log.e("EasyChange", "BTC error: ${e.message}")
+                        btcPrice = null
+                    }
+                    
+                    try {
+                        val ethResponse = binance.getPrice("ETHUSDT")
+                        ethPrice = ethResponse.price.toDoubleOrNull()
+                        Log.d("EasyChange", "ETH: $ethPrice USD")
+                    } catch (e: Exception) {
+                        Log.e("EasyChange", "ETH error: ${e.message}")
+                        ethPrice = null
                     }
 
                     if (rates.isNotEmpty()) {
@@ -606,6 +624,59 @@ fun MainScreen(
                 }
             } else if (!isLoading) {
                 Text("Дані не завантажено", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // Криптовалюти BTC та ETH
+            if (btcPrice != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "₿ BTC",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            String.format(Locale.US, "%.2f", btcPrice) + " USD",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+            }
+
+            if (ethPrice != null) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Ξ ETH",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            String.format(Locale.US, "%.2f", ethPrice) + " USD",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(16.dp))
