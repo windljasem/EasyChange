@@ -101,111 +101,108 @@ class MainActivity : ComponentActivity() {
             .create(BinanceApi::class.java)
 
         setContent {
-            // прибирає MIUI / Samsung / Pixel overscroll-полосу      
 
-                var source by remember { mutableStateOf("KURS") }
-                var amount by remember { mutableStateOf("100") }
-                var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
-                var btc by remember { mutableStateOf<Double?>(null) }
-                val scope = rememberCoroutineScope()
+            var source by remember { mutableStateOf("KURS") }
+            var amount by remember { mutableStateOf("100") }
+            var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
+            var btc by remember { mutableStateOf<Double?>(null) }
+            val scope = rememberCoroutineScope()
 
-                fun refresh() {
-                    scope.launch {
-                        try {
-                            rates = when (source) {
+            fun refresh() {
+                scope.launch {
+                    try {
+                        rates = when (source) {
 
-                                "KURS", "INTERBANK" -> {
-                                    kurs.load().data.map {
-                                        Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
-                                    }
-                                }
-
-                                "MONO" -> {
-                                    mono.load()
-                                        .mapNotNull {
-                                            val b = it.code(it.currencyCodeA)
-                                            val q = it.code(it.currencyCodeB)
-
-                                            if (b != null && q == "UAH" && it.rateCross != null) {
-                                                Fx(b, q, null, null, it.rateCross)
-                                            } else null
-                                        }
-                                }
-
-                                else -> {
-                                    nbu.load()
-                                        .filter { it.cc in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CAD", "CZK", "BGN", "HRK") }
-                                        .map {
-                                            Fx(it.cc, "UAH", null, null, it.rate)
-                                        }
+                            "KURS", "INTERBANK" -> {
+                                kurs.load().data.map {
+                                    Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
                                 }
                             }
 
-                            btc = binance.btc().price.toDouble()
+                            "MONO" -> {
+                                mono.load().mapNotNull {
+                                    val b = it.code(it.currencyCodeA)
+                                    val q = it.code(it.currencyCodeB)
 
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                                    if (b != null && q == "UAH" && it.rateCross != null) {
+                                        Fx(b, q, null, null, it.rateCross)
+                                    } else null
+                                }
+                            }
+
+                            else -> {
+                                nbu.load()
+                                    .filter { it.cc in listOf("USD","EUR","PLN","GBP","CHF","CAD","CZK","BGN","HRK") }
+                                    .map {
+                                        Fx(it.cc, "UAH", null, null, it.rate)
+                                    }
+                            }
+                        }
+
+                        btc = binance.btc().price.toDouble()
+
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+
+            LaunchedEffect(source) { refresh() }
+
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(12.dp)
+            ) {
+
+                Row {
+                    listOf(
+                        "KURS" to "kurs.com.ua",
+                        "MONO" to "monobank.ua",
+                        "NBU" to "bank.gov.ua",
+                        "INTERBANK" to "minfin.com.ua"
+                    ).forEach { (code, url) ->
+                        Button(
+                            onClick = { source = code },
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                                Text(code)
+                                Text(url, fontSize = 10.sp)
+                            }
                         }
                     }
                 }
 
-                LaunchedEffect(source) { refresh() }
+                Spacer(Modifier.height(8.dp))
 
-                Column(
-                    Modifier
-                    .fillMaxSize()
-                    .padding(12.dp)
-                ) {
+                OutlinedTextField(
+                    value = amount,
+                    onValueChange = { amount = it },
+                    label = { Text("USD") }
+                )
 
-                    Row {
-                        listOf(
-                            "KURS" to "kurs.com.ua",
-                            "MONO" to "monobank.ua",
-                            "NBU" to "bank.gov.ua",
-                            "INTERBANK" to "minfin.com.ua"
-                        ).forEach { (code, url) ->
-                            Button(
-                                onClick = { source = code },
-                                modifier = Modifier.padding(end = 6.dp)
-                            ) {
-                                Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                                    Text(code)
-                                    Text(url, fontSize = 10.sp)
-                                }
-                            }
-                        }
-                    }
+                Spacer(Modifier.height(8.dp))
 
-                    Spacer(Modifier.height(8.dp))
+                val hasUsd = rates.any { it.base == "USD" }
+                val hasUah = rates.any { it.quote == "UAH" }
 
-                    OutlinedTextField(
-                        value = amount,
-                        onValueChange = { amount = it },
-                        label = { Text("USD") }
-                    )
+                listOf("EUR", "PLN", "UAH").forEach { code ->
+                    val v =
+                        if (!hasUsd || !hasUah) 0.0
+                        else convert(amount.toDoubleOrNull() ?: 0.0, "USD", code, rates)
 
-                    Spacer(Modifier.height(8.dp))
+                    Text("$code  ${String.format(Locale.US, "%.2f", v)}")
+                }
 
-                    val hasUsd = rates.any { it.base == "USD" }
-                    val hasUah = rates.any { it.quote == "UAH" }
+                Spacer(Modifier.height(12.dp))
 
-                    listOf("EUR", "PLN", "UAH").forEach { code ->
-                        val v =
-                            if (!hasUsd || !hasUah) 0.0
-                            else convert(amount.toDoubleOrNull() ?: 0.0, "USD", code, rates)
+                Text("BTC → USD  ${btc ?: "--"}")
 
-                        Text("$code  ${String.format(Locale.US, "%.2f", v)}")
-                    }
+                Spacer(Modifier.height(8.dp))
 
-                    Spacer(Modifier.height(12.dp))
-
-                    Text("BTC → USD  ${btc ?: "--"}")
-
-                    Spacer(Modifier.height(8.dp))
-
-                    Button(onClick = { refresh() }) {
-                        Text("⟳")
-                    }
+                Button(onClick = { refresh() }) {
+                    Text("⟳")
                 }
             }
         }
