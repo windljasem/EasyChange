@@ -85,7 +85,8 @@ data class NbpRate(
 
 interface CnbApi {
     @GET("en/financial-markets/foreign-exchange-market/central-bank-exchange-rate-fixing/central-bank-exchange-rate-fixing/daily.txt")
-    suspend fun load(): String
+    @retrofit2.http.Streaming
+    suspend fun load(): okhttp3.ResponseBody
 }
 
 interface BinanceApi {
@@ -241,7 +242,6 @@ class MainActivity : ComponentActivity() {
 
         val cnb = Retrofit.Builder()
             .baseUrl("https://www.cnb.cz/")
-            .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(CnbApi::class.java)
 
@@ -355,7 +355,8 @@ fun MainScreen(
 
                         "CNB" -> {
                             try {
-                                val txt = cnb.load()
+                                val response = cnb.load()
+                                val txt = response.string()
                                 Log.d("EasyChange", "CNB: ${txt.length} chars")
                                 val parsed = parseCnbTxt(txt)
                                 if (parsed.isEmpty()) {
