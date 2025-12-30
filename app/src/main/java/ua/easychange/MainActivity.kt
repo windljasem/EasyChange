@@ -89,6 +89,16 @@ interface CnbApi {
     suspend fun load(): okhttp3.ResponseBody
 }
 
+interface ExchangeRateApi {
+    @GET("v6/latest/USD")
+    suspend fun load(): ExchangeRateResponse
+}
+
+data class ExchangeRateResponse(
+    val base_code: String,
+    val rates: Map<String, Double>
+)
+
 interface BinanceApi {
     @GET("api/v3/ticker/price")
     suspend fun btc(@Query("symbol") s: String = "BTCUSDT"): BinanceDto
@@ -245,6 +255,12 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(CnbApi::class.java)
 
+        val exchangeRate = Retrofit.Builder()
+            .baseUrl("https://open.exchangerate-api.com/")
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ExchangeRateApi::class.java)
+
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
             .addConverterFactory(GsonConverterFactory.create())
@@ -257,7 +273,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(mono, nbu, nbp, cnb, binance)
+                    MainScreen(mono, nbu, nbp, cnb, exchangeRate, binance)
                 }
             }
         }
@@ -271,6 +287,7 @@ fun MainScreen(
     nbu: NbuApi,
     nbp: NbpApi,
     cnb: CnbApi,
+    exchangeRate: ExchangeRateApi,
     binance: BinanceApi
 ) {
     var source by remember { mutableStateOf("MONO") }
@@ -370,6 +387,21 @@ fun MainScreen(
                             }
                         }
 
+                        "EXRATE" -> {
+                            try {
+                                val response = exchangeRate.load()
+                                Log.d("EasyChange", "ExchangeRate: ${response.rates.size} rates")
+                                
+                                response.rates.map { (code, rate) ->
+                                    Fx(code, "USD", null, null, rate)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "ExchangeRate error: ${e.message}", e)
+                                errorMessage = "ExchangeRate: ${e.message}"
+                                emptyList()
+                            }
+                        }
+
                         else -> emptyList()
                     }
 
@@ -413,7 +445,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "MONO" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "MONO") 
                                 MaterialTheme.colorScheme.primary 
@@ -430,7 +462,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "NBU" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "NBU") 
                                 MaterialTheme.colorScheme.primary 
@@ -452,7 +484,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "NBP" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "NBP") 
                                 MaterialTheme.colorScheme.primary 
@@ -467,19 +499,19 @@ fun MainScreen(
                     }
                     
                     Button(
-                        onClick = { source = "CNB" },
+                        onClick = { source = "EXRATE" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "CNB") 
+                            containerColor = if (source == "EXRATE") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("CNB", fontSize = 13.sp)
-                            Text("cnb.cz", fontSize = 8.sp)
+                            Text("ExRate", fontSize = 12.sp)
+                            Text("exchangerate-api", fontSize = 7.sp)
                         }
                     }
                 }
@@ -559,89 +591,6 @@ fun MainScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
-            // Кроскурси
-            if (rates.isNotEmpty()) {
-                Text(
-                    "Кроскурси:",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                
-                val crossPairs = listOf(
-                    "PLN" to "UAH",
-                    "UAH" to "USD",
-                    "USD" to "EUR"
-                )
-                
-                crossPairs.forEach { (from, to) ->
-                    val direct = convert(1.0, from, to, rates)
-                    val reverse = convert(1.0, to, from, rates)
-                    
-                    if (direct != null || reverse != null) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp)
-                            ) {
-                                if (direct != null) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("1 $from =", fontSize = 13.sp)
-                                        Text(
-                                            String.format(Locale.US, "%.4f", direct) + " $to",
-                                            fontSize = 13.sp,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                        )
-                                    }
-                                }
-                                if (reverse != null) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text("1 $to =", fontSize = 13.sp)
-                                        Text(
-                                            String.format(Locale.US, "%.4f", reverse) + " $from",
-                                            fontSize = 13.sp,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Spacer(Modifier.height(12.dp))
-                
-                // Кнопка оновлення
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Button(
-                        onClick = { refresh() },
-                        enabled = !isLoading,
-                        modifier = Modifier.width(200.dp)
-                    ) {
-                        Text(if (isLoading) "Завантаження..." else "Оновити ⟳", fontSize = 13.sp)
-                    }
-                }
-                
-                Spacer(Modifier.height(12.dp))
-            }
-
             val amountDouble = amount.toDoubleOrNull() ?: 0.0
 
             if (rates.isNotEmpty()) {
