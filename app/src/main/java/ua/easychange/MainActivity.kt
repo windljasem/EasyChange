@@ -38,6 +38,11 @@ interface KursApi {
 data class KursResponse(val data: List<KursDto>)
 data class KursDto(val base: String, val quote: String, val buy: Double, val sell: Double)
 
+interface KursHtmlApi {
+    @GET("currency/nbu/")
+    suspend fun loadHtml(): String
+}
+
 interface MonoApi {
     @GET("bank/currency")
     suspend fun load(): List<MonoDto>
@@ -64,8 +69,18 @@ data class NbuDto(
 
 interface MinfinApi {
     @GET("ua/currency/")
-    suspend fun load(): String
+    suspend fun loadHtml(): String
 }
+
+interface MinfinJsonApi {
+    @GET("data/currency/cash/")
+    suspend fun load(): MinfinResponse
+}
+data class MinfinResponse(val data: Map<String, MinfinCurrency>)
+data class MinfinCurrency(
+    val ask: String? = null,
+    val bid: String? = null
+)
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
@@ -100,6 +115,53 @@ fun MonoDto.code(i: Int) = when (i) {
     975 -> "BGN"
     124 -> "CAD"
     else -> null
+}
+
+fun parseMinfinJson(data: Map<String, MinfinCurrency>): List<Fx> {
+    val rates = mutableListOf<Fx>()
+    
+    try {
+        data.forEach { (code, curr) ->
+            if (code in listOf("usd", "eur", "pln", "gbp", "chf", "czk", "cad")) {
+                val ask = curr.ask?.toDoubleOrNull()
+                val bid = curr.bid?.toDoubleOrNull()
+                
+                if (ask != null && bid != null && ask > 0 && bid > 0) {
+                    val currCode = code.uppercase()
+                    rates.add(Fx(currCode, "UAH", bid, ask, (bid + ask) / 2))
+                    Log.d("EasyChange", "Minfin: $currCode -> UAH = $bid/$ask")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("EasyChange", "Minfin JSON parsing error: ${e.message}")
+    }
+    
+    return rates
+}
+
+fun parseKursHtml(html: String): List<Fx> {
+    val rates = mutableListOf<Fx>()
+    
+    try {
+        // Парсимо таблицю курсів
+        val rowRegex = """<tr[^>]*>[\s\S]*?<td[^>]*>([A-Z]{3})</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?</tr>""".toRegex()
+        
+        rowRegex.findAll(html).forEach { match ->
+            val code = match.groupValues[1]
+            val buy = match.groupValues[2].toDoubleOrNull()
+            val sell = match.groupValues[3].toDoubleOrNull()
+            
+            if (code in CURRENCIES.map { it.code } && buy != null && sell != null && buy > 0 && sell > 0) {
+                rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
+                Log.d("EasyChange", "Kurs HTML: $code -> UAH = $buy/$sell")
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("EasyChange", "Kurs HTML parsing error: ${e.message}")
+    }
+    
+    return rates
 }
 
 fun parseMinfinHtml(html: String): List<Fx> {
@@ -166,11 +228,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val kurs = Retrofit.Builder()
+        val kursHtml = Retrofit.Builder()
             .baseUrl("https://kurs.com.ua/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(KursApi::class.java)
+            .create(KursHtmlApi::class.java)
 
         val mono = Retrofit.Builder()
             .baseUrl("https://api.monobank.ua/")
@@ -184,11 +246,11 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val minfin = Retrofit.Builder()
+        val minfinJson = Retrofit.Builder()
             .baseUrl("https://minfin.com.ua/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(MinfinApi::class.java)
+            .create(MinfinJsonApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -202,7 +264,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(kurs, mono, nbu, minfin, binance)
+                    MainScreen(kursHtml, mono, nbu, minfinJson, binance)
                 }
             }
         }
@@ -211,10 +273,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainScreen(
-    kurs: KursApi,
+    kursHtml: KursHtmlApi,
     mono: MonoApi,
     nbu: NbuApi,
-    minfin: MinfinApi,
+    minfinJson: MinfinJsonApi,
     binance: BinanceApi
 ) {
     var source by remember { mutableStateOf("KURS") }
@@ -240,19 +302,17 @@ fun MainScreen(
                     rates = when (source) {
                         "KURS" -> {
                             try {
-                                val response = kurs.load()
-                                Log.d("EasyChange", "KURS loaded: ${response.data.size} rates")
+                                val html = kursHtml.loadHtml()
+                                Log.d("EasyChange", "KURS HTML loaded: ${html.length} chars")
                                 
-                                if (response.data.isEmpty()) {
-                                    errorMessage = "KURS: отримано 0 курсів"
+                                val parsed = parseKursHtml(html)
+                                Log.d("EasyChange", "KURS parsed: ${parsed.size} rates")
+                                
+                                if (parsed.isEmpty()) {
+                                    errorMessage = "KURS: не знайдено курсів у HTML"
                                 }
                                 
-                                response.data
-                                    .filter { it.buy > 0 && it.sell > 0 }
-                                    .map {
-                                        Log.d("EasyChange", "KURS: ${it.base}/${it.quote} = ${it.buy}/${it.sell}")
-                                        Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
-                                    }
+                                parsed
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "KURS error: ${e.message}", e)
                                 errorMessage = "KURS помилка: ${e.message}"
@@ -318,18 +378,14 @@ fun MainScreen(
 
                         "INTERBANK" -> {
                             try {
-                                val html = minfin.load()
-                                Log.d("EasyChange", "MINFIN loaded HTML: ${html.length} chars")
+                                val response = minfinJson.load()
+                                Log.d("EasyChange", "MINFIN JSON loaded: ${response.data.size} currencies")
                                 
-                                val parsed = parseMinfinHtml(html)
+                                val parsed = parseMinfinJson(response.data)
                                 Log.d("EasyChange", "MINFIN parsed: ${parsed.size} rates")
                                 
                                 if (parsed.isEmpty()) {
-                                    errorMessage = "INTERBANK: не знайдено курсів у HTML"
-                                }
-                                
-                                parsed.forEach {
-                                    Log.d("EasyChange", "MINFIN: ${it.base}/${it.quote} = ${it.mid}")
+                                    errorMessage = "INTERBANK: не знайдено курсів"
                                 }
                                 
                                 parsed
