@@ -65,14 +65,27 @@ data class NbuDto(
     val exchangedate: String? = null
 )
 
-interface PrivatBankApi {
-    @GET("obmin-valiut")
-    suspend fun loadHtml(): String
+interface NbpApi {
+    @GET("api/exchangerates/tables/a/?format=json")
+    suspend fun load(): List<NbpTable>
 }
 
-interface PumbApi {
-    @GET("")
-    suspend fun loadHtml(): String
+data class NbpTable(
+    val table: String,
+    val no: String,
+    val effectiveDate: String,
+    val rates: List<NbpRate>
+)
+
+data class NbpRate(
+    val currency: String,
+    val code: String,
+    val mid: Double
+)
+
+interface CnbApi {
+    @GET("en/financial-markets/foreign-exchange-market/central-bank-exchange-rate-fixing/central-bank-exchange-rate-fixing/daily.txt")
+    suspend fun load(): String
 }
 
 interface BinanceApi {
@@ -110,81 +123,30 @@ fun MonoDto.code(i: Int) = when (i) {
     else -> null
 }
 
-fun parsePrivatHtml(html: String): List<Fx> {
+fun parseCnbTxt(txt: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
     try {
-        // Шукаємо курси валют у таблиці
-        val currencyRegex = """data-currency="([A-Z]{3})"[\s\S]*?<td[^>]*class="[^"]*buy[^"]*"[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*class="[^"]*sell[^"]*"[^>]*>([\d.]+)</td>""".toRegex()
+        val lines = txt.split("\n")
         
-        currencyRegex.findAll(html).forEach { match ->
-            val code = match.groupValues[1]
-            val buy = match.groupValues[2].toDoubleOrNull()
-            val sell = match.groupValues[3].toDoubleOrNull()
-            
-            if (buy != null && sell != null && buy > 0 && sell > 0) {
-                rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                Log.d("EasyChange", "Privat: $code -> UAH = $buy/$sell")
-            }
-        }
-        
-        // Альтернативний regex якщо перший не спрацював
-        if (rates.isEmpty()) {
-            val altRegex = """<tr[^>]*data-currency="([A-Z]{3})"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
-            
-            altRegex.findAll(html).forEach { match ->
-                val code = match.groupValues[1]
-                val buy = match.groupValues[2].toDoubleOrNull()
-                val sell = match.groupValues[3].toDoubleOrNull()
+        // Пропускаємо перші 2 рядки (дата і заголовок)
+        lines.drop(2).forEach { line ->
+            val parts = line.split("|")
+            if (parts.size >= 5) {
+                val code = parts[3].trim()
+                val amount = parts[2].trim().toDoubleOrNull() ?: 1.0
+                val rate = parts[4].trim().toDoubleOrNull()
                 
-                if (buy != null && sell != null && buy > 0 && sell > 0) {
-                    rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                    Log.d("EasyChange", "Privat (alt): $code -> UAH = $buy/$sell")
+                if (rate != null && rate > 0) {
+                    // CNB дає курс CZK до валюти, тому перераховуємо
+                    val actualRate = rate / amount
+                    rates.add(Fx(code, "CZK", null, null, actualRate))
+                    Log.d("EasyChange", "CNB: $code -> CZK = $actualRate")
                 }
             }
         }
     } catch (e: Exception) {
-        Log.e("EasyChange", "Privat parsing error: ${e.message}")
-    }
-    
-    return rates
-}
-
-fun parsePumbHtml(html: String): List<Fx> {
-    val rates = mutableListOf<Fx>()
-    
-    try {
-        // Шукаємо курси валют на сайті PUMB
-        val currencyRegex = """data-code="([A-Z]{3})"[\s\S]*?data-buy="([\d.]+)"[\s\S]*?data-sell="([\d.]+)"""".toRegex()
-        
-        currencyRegex.findAll(html).forEach { match ->
-            val code = match.groupValues[1]
-            val buy = match.groupValues[2].toDoubleOrNull()
-            val sell = match.groupValues[3].toDoubleOrNull()
-            
-            if (buy != null && sell != null && buy > 0 && sell > 0) {
-                rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                Log.d("EasyChange", "PUMB: $code -> UAH = $buy/$sell")
-            }
-        }
-        
-        // Альтернативний regex - таблиця
-        if (rates.isEmpty()) {
-            val tableRegex = """<tr[^>]*>[\s\S]*?<td[^>]*>([A-Z]{3})</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
-            
-            tableRegex.findAll(html).forEach { match ->
-                val code = match.groupValues[1]
-                val buy = match.groupValues[2].toDoubleOrNull()
-                val sell = match.groupValues[3].toDoubleOrNull()
-                
-                if (buy != null && sell != null && buy > 0 && sell > 0) {
-                    rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                    Log.d("EasyChange", "PUMB (table): $code -> UAH = $buy/$sell")
-                }
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("EasyChange", "PUMB parsing error: ${e.message}")
+        Log.e("EasyChange", "CNB parsing error: ${e.message}")
     }
     
     return rates
@@ -205,31 +167,49 @@ fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? 
     }
     
     // Через UAH
-    val fromRate = rates.firstOrNull { it.base == from && it.quote == "UAH" }
-    val toRate = rates.firstOrNull { it.base == to && it.quote == "UAH" }
+    val fromUah = rates.firstOrNull { it.base == from && it.quote == "UAH" }
+    val toUah = rates.firstOrNull { it.base == to && it.quote == "UAH" }
     
-    if (fromRate != null && toRate != null) {
-        val uahAmount = amount * fromRate.mid
-        return uahAmount / toRate.mid
+    if (fromUah != null && toUah != null) {
+        val uahAmount = amount * fromUah.mid
+        return uahAmount / toUah.mid
+    }
+    
+    // Через PLN (для NBP)
+    val fromPln = rates.firstOrNull { it.base == from && it.quote == "PLN" }
+    val toPln = rates.firstOrNull { it.base == to && it.quote == "PLN" }
+    
+    if (fromPln != null && toPln != null) {
+        val plnAmount = amount * fromPln.mid
+        return plnAmount / toPln.mid
+    }
+    
+    // Через CZK (для CNB)
+    val fromCzk = rates.firstOrNull { it.base == from && it.quote == "CZK" }
+    val toCzk = rates.firstOrNull { it.base == to && it.quote == "CZK" }
+    
+    if (fromCzk != null && toCzk != null) {
+        val czkAmount = amount * fromCzk.mid
+        return czkAmount / toCzk.mid
     }
     
     // Через USD
-    val fromToUsd = rates.firstOrNull { it.base == from && it.quote == "USD" }
+    val fromUsd = rates.firstOrNull { it.base == from && it.quote == "USD" }
         ?: rates.firstOrNull { it.base == "USD" && it.quote == from }
-    val toFromUsd = rates.firstOrNull { it.base == to && it.quote == "USD" }
+    val toUsd = rates.firstOrNull { it.base == to && it.quote == "USD" }
         ?: rates.firstOrNull { it.base == "USD" && it.quote == to }
     
-    if (fromToUsd != null && toFromUsd != null) {
-        val usdAmount = if (fromToUsd.base == from) {
-            amount * fromToUsd.mid
+    if (fromUsd != null && toUsd != null) {
+        val usdAmount = if (fromUsd.base == from) {
+            amount * fromUsd.mid
         } else {
-            amount / fromToUsd.mid
+            amount / fromUsd.mid
         }
         
-        return if (toFromUsd.base == to) {
-            usdAmount / toFromUsd.mid
+        return if (toUsd.base == to) {
+            usdAmount / toUsd.mid
         } else {
-            usdAmount * toFromUsd.mid
+            usdAmount * toUsd.mid
         }
     }
     
@@ -253,17 +233,17 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val privat = Retrofit.Builder()
-            .baseUrl("https://privatbank.ua/")
+        val nbp = Retrofit.Builder()
+            .baseUrl("https://api.nbp.pl/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(PrivatBankApi::class.java)
+            .create(NbpApi::class.java)
 
-        val pumb = Retrofit.Builder()
-            .baseUrl("https://www.pumb.ua/")
+        val cnb = Retrofit.Builder()
+            .baseUrl("https://www.cnb.cz/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(PumbApi::class.java)
+            .create(CnbApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -277,7 +257,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(mono, nbu, privat, pumb, binance)
+                    MainScreen(mono, nbu, nbp, cnb, binance)
                 }
             }
         }
@@ -289,8 +269,8 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     mono: MonoApi,
     nbu: NbuApi,
-    privat: PrivatBankApi,
-    pumb: PumbApi,
+    nbp: NbpApi,
+    cnb: CnbApi,
     binance: BinanceApi
 ) {
     var source by remember { mutableStateOf("MONO") }
@@ -313,22 +293,6 @@ fun MainScreen(
                     Log.d("EasyChange", "Loading from: $source")
                     
                     rates = when (source) {
-                        "PUMB" -> {
-                            try {
-                                val html = pumb.loadHtml()
-                                Log.d("EasyChange", "PUMB: ${html.length} chars")
-                                val parsed = parsePumbHtml(html)
-                                if (parsed.isEmpty()) {
-                                    errorMessage = "PUMB: не знайдено курсів"
-                                }
-                                parsed
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "PUMB error: ${e.message}", e)
-                                errorMessage = "PUMB: ${e.message}"
-                                emptyList()
-                            }
-                        }
-
                         "MONO" -> {
                             try {
                                 val response = mono.load()
@@ -369,18 +333,38 @@ fun MainScreen(
                             }
                         }
 
-                        "PRIVATBANK" -> {
+                        "NBP" -> {
                             try {
-                                val html = privat.loadHtml()
-                                Log.d("EasyChange", "PrivatBank: ${html.length} chars")
-                                val parsed = parsePrivatHtml(html)
+                                val response = nbp.load()
+                                Log.d("EasyChange", "NBP: ${response.size} tables")
+                                
+                                if (response.isNotEmpty()) {
+                                    response[0].rates.map { rate ->
+                                        Fx(rate.code, "PLN", null, null, rate.mid)
+                                    }
+                                } else {
+                                    errorMessage = "NBP: порожня відповідь"
+                                    emptyList()
+                                }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "NBP error: ${e.message}", e)
+                                errorMessage = "NBP: ${e.message}"
+                                emptyList()
+                            }
+                        }
+
+                        "CNB" -> {
+                            try {
+                                val txt = cnb.load()
+                                Log.d("EasyChange", "CNB: ${txt.length} chars")
+                                val parsed = parseCnbTxt(txt)
                                 if (parsed.isEmpty()) {
-                                    errorMessage = "PrivatBank: не знайдено курсів"
+                                    errorMessage = "CNB: не знайдено курсів"
                                 }
                                 parsed
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "PrivatBank error: ${e.message}", e)
-                                errorMessage = "PrivatBank: ${e.message}"
+                                Log.e("EasyChange", "CNB error: ${e.message}", e)
+                                errorMessage = "CNB: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -426,22 +410,6 @@ fun MainScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Button(
-                        onClick = { source = "PUMB" },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "PUMB") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("PUMB", fontSize = 13.sp)
-                            Text("pumb.ua", fontSize = 8.sp)
-                        }
-                    }
-                    
-                    Button(
                         onClick = { source = "MONO" },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
@@ -456,12 +424,7 @@ fun MainScreen(
                             Text("monobank.ua", fontSize = 8.sp)
                         }
                     }
-                }
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
+                    
                     Button(
                         onClick = { source = "NBU" },
                         modifier = Modifier.weight(1f),
@@ -477,20 +440,41 @@ fun MainScreen(
                             Text("bank.gov.ua", fontSize = 8.sp)
                         }
                     }
-                    
+                }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Button(
-                        onClick = { source = "PRIVATBANK" },
+                        onClick = { source = "NBP" },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "PRIVATBANK") 
+                            containerColor = if (source == "NBP") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("PrivatBank", fontSize = 12.sp)
-                            Text("privatbank.ua", fontSize = 8.sp)
+                            Text("NBP", fontSize = 13.sp)
+                            Text("nbp.pl", fontSize = 8.sp)
+                        }
+                    }
+                    
+                    Button(
+                        onClick = { source = "CNB" },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (source == "CNB") 
+                                MaterialTheme.colorScheme.primary 
+                            else 
+                                MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Text("CNB", fontSize = 13.sp)
+                            Text("cnb.cz", fontSize = 8.sp)
                         }
                     }
                 }
