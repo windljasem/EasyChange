@@ -145,8 +145,10 @@ class MainActivity : ComponentActivity() {
                             }
 
                             else -> {
-                                nbu.load().map {
-                                    Fx(it.cc, "UAH", null, null, it.rate)
+                                nbu.load()
+                                    .filter { it.cc in listOf("USD","EUR","PLN","GBP","CHF","CAD","CZK","BGN","HRK") }
+                                    .map {
+                                        Fx(it.cc, "UAH", null, null, it.rate)
                                 }
                             }
                         }
