@@ -101,8 +101,7 @@ class MainActivity : ComponentActivity() {
             .create(BinanceApi::class.java)
 
         setContent {
-            // прибирає MIUI / Samsung / Pixel overscroll-полосу
-             {
+            // прибирає MIUI / Samsung / Pixel overscroll-полосу      
 
                 var source by remember { mutableStateOf("KURS") }
                 var amount by remember { mutableStateOf("100") }
