@@ -115,33 +115,20 @@ class MainActivity : ComponentActivity() {
 
                             "KURS", "INTERBANK" -> {
                                 kurs.load().data.map {
-                                    Fx(
-                                        it.base,
-                                        it.quote,
-                                        it.buy,
-                                        it.sell,
-                                        (it.buy + it.sell) / 2
-                                    )
+                                    Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
                                 }
                             }
 
                             "MONO" -> {
-                                mono.load().mapNotNull {
-                                    val b = it.code(it.currencyCodeA)
-                                    val q = it.code(it.currencyCodeB)
+                                mono.load()
+                                    .mapNotNull {
+                                        val b = it.code(it.currencyCodeA)
+                                        val q = it.code(it.currencyCodeB)
 
-                                    if (b != null && q == "UAH" &&
-                                        it.rateBuy != null && it.rateSell != null
-                                    ) {
-                                        Fx(
-                                            b,
-                                            q,
-                                            it.rateBuy,
-                                            it.rateSell,
-                                            (it.rateBuy + it.rateSell) / 2
-                                        )
-                                    } else null
-                                }
+                                        if (b != null && q == "UAH" && it.rateCross != null) {
+                                            Fx(b, q, null, null, it.rateCross)
+                                        } else null
+                                    }
                             }
 
                             else -> {
@@ -149,7 +136,7 @@ class MainActivity : ComponentActivity() {
                                     .filter { it.cc in listOf("USD","EUR","PLN","GBP","CHF","CAD","CZK","BGN","HRK") }
                                     .map {
                                         Fx(it.cc, "UAH", null, null, it.rate)
-                                }
+                                    }
                             }
                         }
 
@@ -164,9 +151,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(source) { refresh() }
 
             Column(
-                Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp)
+                Modifier.padding(12.dp)   // ⬅ прибрали scroll, тому зникне фіолетова полоса
             ) {
 
                 Row {
@@ -176,14 +161,11 @@ class MainActivity : ComponentActivity() {
                         "NBU" to "bank.gov.ua",
                         "INTERBANK" to "minfin.com.ua"
                     ).forEach { (code, url) ->
-
                         Button(
                             onClick = { source = code },
                             modifier = Modifier.padding(end = 6.dp)
                         ) {
-                            Column(
-                                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
-                            ) {
+                            Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                                 Text(code)
                                 Text(url, fontSize = 10.sp)
                             }
