@@ -1,7 +1,6 @@
 package ua.easychange
 
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -18,203 +17,180 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
-// ------------------ MODELS ------------------
-data class Fx(val base: String, val quote: String, val buy: Double?, val sell: Double?, val mid: Double)
+/* ---------------- MODELS ---------------- */
 
-// ------------------ API ------------------
+data class Fx(val base:String,val quote:String,val buy:Double?,val sell:Double?,val mid:Double)
+
+/* ---------------- API ---------------- */
+
 interface KursApi {
     @GET("api/market/exchange-rates")
     suspend fun load(): KursResponse
 }
-data class KursResponse(val data: List<KursDto>)
-data class KursDto(val base: String, val quote: String, val buy: Double, val sell: Double)
+data class KursResponse(val data:List<KursDto>)
+data class KursDto(val base:String,val quote:String,val buy:Double,val sell:Double)
 
 interface MonoApi {
     @GET("bank/currency")
     suspend fun load(): List<MonoDto>
 }
 data class MonoDto(
-    val currencyCodeA: Int,
-    val currencyCodeB: Int,
-    val rateBuy: Double? = null,
-    val rateSell: Double? = null,
-    val rateCross: Double? = null
+    val currencyCodeA:Int,
+    val currencyCodeB:Int,
+    val rateBuy:Double?,
+    val rateSell:Double?,
+    val rateCross:Double?
 )
 
 interface NbuApi {
     @GET("NBUStatService/v1/statdirectory/exchange?json")
     suspend fun load(): List<NbuDto>
 }
-data class NbuDto(
-    val r030: Int? = null,
-    val txt: String? = null,
-    val rate: Double? = null,
-    val cc: String? = null,
-    val exchangedate: String? = null
-)
+data class NbuDto(val cc:String?, val rate:Double?)
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
-    suspend fun btc(@Query("symbol") s: String = "BTCUSDT"): BinanceDto
+    suspend fun btc(@Query("symbol") s:String="BTCUSDT"): BinanceDto
 }
-data class BinanceDto(val price: String)
+data class BinanceDto(val price:String)
 
-// ------------------ UTILS ------------------
-fun MonoDto.code(i: Int) = when (i) {
-    840 -> "USD"
-    978 -> "EUR"
-    985 -> "PLN"
-    980 -> "UAH"
-    else -> null
+/* ---------------- UTILS ---------------- */
+
+fun MonoDto.code(i:Int)=when(i){
+    840->"USD";978->"EUR";985->"PLN";980->"UAH";else->null
 }
 
-fun convert(a: Double, from: String, to: String, r: List<Fx>): Double {
-    if (from == to) return a
-
-    r.firstOrNull { it.base == from && it.quote == to }?.let { return a * it.mid }
-    r.firstOrNull { it.base == to && it.quote == from }?.let { return a / it.mid }
-
-    val toUsd = r.firstOrNull { it.base == from && it.quote == "USD" }
-        ?: r.firstOrNull { it.quote == from && it.base == "USD" }
-
-    val fromUsd = r.firstOrNull { it.base == "USD" && it.quote == to }
-        ?: r.firstOrNull { it.quote == "USD" && it.base == to }
-
-    if (toUsd != null && fromUsd != null) {
-        val usd = if (toUsd.base == from) a * toUsd.mid else a / toUsd.mid
-        return if (fromUsd.base == "USD") usd * fromUsd.mid else usd / fromUsd.mid
-    }
-
-    return 0.0
+fun convert(a:Double,from:String,to:String,r:List<Fx>):Double{
+    if(from==to) return a
+    r.firstOrNull{it.base==from && it.quote==to}?.let{ return a*it.mid }
+    r.firstOrNull{it.base==to && it.quote==from}?.let{ return a/it.mid }
+    val usd = convert(a,from,"USD",r)
+    return convert(usd,"USD",to,r)
 }
 
-// ------------------ ACTIVITY ------------------
-class MainActivity : ComponentActivity() {
+/* ---------------- ACTIVITY ---------------- */
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+class MainActivity:ComponentActivity(){
+    override fun onCreate(savedInstanceState:Bundle?){
         super.onCreate(savedInstanceState)
 
-        val kurs = Retrofit.Builder()
-            .baseUrl("https://kurs.com.ua/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(KursApi::class.java)
+        val kurs = Retrofit.Builder().baseUrl("https://kurs.com.ua/")
+            .addConverterFactory(GsonConverterFactory.create()).build().create(KursApi::class.java)
 
-        val mono = Retrofit.Builder()
-            .baseUrl("https://api.monobank.ua/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(MonoApi::class.java)
+        val mono = Retrofit.Builder().baseUrl("https://api.monobank.ua/")
+            .addConverterFactory(GsonConverterFactory.create()).build().create(MonoApi::class.java)
 
-        val nbu = Retrofit.Builder()
-            .baseUrl("https://bank.gov.ua/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(NbuApi::class.java)
+        val nbu = Retrofit.Builder().baseUrl("https://bank.gov.ua/")
+            .addConverterFactory(GsonConverterFactory.create()).build().create(NbuApi::class.java)
 
-        val binance = Retrofit.Builder()
-            .baseUrl("https://api.binance.com/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(BinanceApi::class.java)
+        val binance = Retrofit.Builder().baseUrl("https://api.binance.com/")
+            .addConverterFactory(GsonConverterFactory.create()).build().create(BinanceApi::class.java)
 
         setContent {
             MaterialTheme {
-                Surface(Modifier.fillMaxSize()) {
-                    MainScreen(kurs, mono, nbu, binance)
-                }
+                MainScreen(kurs,mono,nbu,binance)
             }
         }
     }
 }
 
 @Composable
-fun MainScreen(kurs: KursApi, mono: MonoApi, nbu: NbuApi, binance: BinanceApi) {
+fun MainScreen(kurs:KursApi, mono:MonoApi, nbu:NbuApi, binance:BinanceApi){
+
     var source by remember { mutableStateOf("KURS") }
     var amount by remember { mutableStateOf("100") }
     var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
     var btc by remember { mutableStateOf<Double?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var lastUpdate by remember { mutableStateOf<Long?>(null) }
+    var lastUpdate by remember { mutableStateOf("") }
+
     val scope = rememberCoroutineScope()
 
-    fun refresh() {
+    fun refresh(){
         scope.launch {
-            isLoading = true
-            error = null
-
-            withContext(Dispatchers.IO) {
-                try {
-                    rates = when (source) {
-                        "KURS", "INTERBANK" -> kurs.load().data.map {
-                            Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
+            withContext(Dispatchers.IO){
+                try{
+                    rates = when(source){
+                        "KURS","INTERBANK" -> kurs.load().data.map {
+                            Fx(it.base,it.quote,it.buy,it.sell,(it.buy+it.sell)/2)
                         }
-                        "MONO" -> mono.load().mapNotNull {
-                            val b = it.code(it.currencyCodeA)
-                            val q = it.code(it.currencyCodeB)
-                            if (b != null && q == "UAH") {
-                                val m = it.rateCross ?: it.rateBuy ?: it.rateSell
-                                if (m != null) Fx(b, q, it.rateBuy, it.rateSell, m) else null
-                            } else null
+                        "MONO" -> mono.load().mapNotNull{
+                            val b=it.code(it.currencyCodeA)
+                            val q=it.code(it.currencyCodeB)
+                            if(b!=null && q=="UAH" && it.rateCross!=null)
+                                Fx(b,q,null,null,it.rateCross)
+                            else null
                         }
-                        "NBU" -> nbu.load().filter { it.cc != null && it.rate != null }
-                            .map { Fx(it.cc!!, "UAH", null, null, it.rate!!) }
-                        else -> emptyList()
+                        else -> nbu.load().filter{it.cc!=null && it.rate!=null}.map{
+                            Fx(it.cc!!,"UAH",null,null,it.rate!!)
+                        }
                     }
-
-                    btc = binance.btc().price.toDoubleOrNull()
-                    lastUpdate = System.currentTimeMillis()
-
-                } catch (e: Exception) {
-                    if (rates.isEmpty()) error = "Джерело тимчасово недоступне"
-                } finally {
-                    isLoading = false
-                }
+                    btc = binance.btc().price.toDouble()
+                    lastUpdate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
+                }catch(_:Exception){}
             }
         }
     }
 
-    LaunchedEffect(source) { refresh() }
+    LaunchedEffect(source){ refresh() }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+
+        /* ----------- SOURCE BUTTONS ----------- */
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("KURS","MONO","NBU","INTERBANK").forEach {
-                Button(onClick = { source = it }, modifier = Modifier.weight(1f)) {
-                    Text(it)
+
+            listOf(
+                Triple("KURS","KURS","kurs.com.ua"),
+                Triple("MONO","MONO","monobank.ua"),
+                Triple("NBU","NBU","bank.gov.ua"),
+                Triple("INTERBANK","iBank","minfin.com.ua")
+            ).forEach { (code,title,sub) ->
+
+                Button(
+                    onClick = { source=code },
+                    modifier = Modifier.weight(1f).height(56.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if(source==code)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.secondary
+                    )
+                ){
+                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally){
+                        Text(title, fontSize = 14.sp)
+                        Text(sub, fontSize = 10.sp)
+                    }
                 }
             }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        OutlinedTextField(amount, { amount = it }, label = { Text("USD") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            value = amount,
+            onValueChange = { amount = it },
+            label = { Text("USD") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(Modifier.height(8.dp))
+        Text("Оновлено: $lastUpdate", fontSize = 12.sp)
 
         Spacer(Modifier.height(12.dp))
 
-        lastUpdate?.let {
-            Text("Оновлено: " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(it)), fontSize = 11.sp)
+        listOf("EUR","PLN","UAH").forEach{
+            val v = if(rates.isEmpty())0.0 else convert(amount.toDoubleOrNull()?:0.0,"USD",it,rates)
+            Text("$it  ${String.format(Locale.US,"%.2f",v)}", fontSize = 18.sp)
         }
 
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Spacer(Modifier.height(12.dp))
+        Text("BTC → USD  ${btc ?: "--"}", fontSize = 16.sp)
 
         Spacer(Modifier.height(12.dp))
 
-        listOf("EUR","PLN","UAH").forEach {
-            val v = convert(amount.toDoubleOrNull() ?: 0.0, "USD", it, rates)
-            Text("$it  ${String.format(Locale.US,"%.2f",v)}")
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Text("BTC → USD  ${btc ?: "--"}")
-
-        Spacer(Modifier.height(16.dp))
-
-        Button(onClick = { refresh() }, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick={refresh()}, modifier = Modifier.fillMaxWidth()){
             Text("Оновити ⟳")
         }
     }
