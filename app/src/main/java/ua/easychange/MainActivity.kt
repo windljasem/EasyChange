@@ -161,6 +161,7 @@ class MainActivity : ComponentActivity() {
                              Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                                  Text(code)
                                  Text(url, fontSize = 10.sp)
+                             }    
                         }
                     }
                 }
