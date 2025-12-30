@@ -102,9 +102,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             // прибирає MIUI / Samsung / Pixel overscroll-полосу
-            androidx.compose.runtime.CompositionLocalProvider(
-                androidx.compose.foundation.LocalOverscrollConfiguration provides null
-            ) {
+             {
 
                 var source by remember { mutableStateOf("KURS") }
                 var amount by remember { mutableStateOf("100") }
@@ -155,7 +153,9 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(source) { refresh() }
 
                 Column(
-                    Modifier.padding(12.dp)
+                    Modifier
+                    .fillMaxSize()
+                    .padding(12.dp)
                 ) {
 
                     Row {
