@@ -224,12 +224,14 @@ fun MainScreen(
     var btc by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun refresh() {
         scope.launch {
             isLoading = true
+            errorMessage = null
             
             withContext(Dispatchers.IO) {
                 try {
@@ -240,13 +242,20 @@ fun MainScreen(
                             try {
                                 val response = kurs.load()
                                 Log.d("EasyChange", "KURS loaded: ${response.data.size} rates")
+                                
+                                if (response.data.isEmpty()) {
+                                    errorMessage = "KURS: отримано 0 курсів"
+                                }
+                                
                                 response.data
                                     .filter { it.buy > 0 && it.sell > 0 }
                                     .map {
+                                        Log.d("EasyChange", "KURS: ${it.base}/${it.quote} = ${it.buy}/${it.sell}")
                                         Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
                                     }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "KURS error: ${e.message}", e)
+                                errorMessage = "KURS помилка: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -280,6 +289,7 @@ fun MainScreen(
                                 }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "MONO error: ${e.message}", e)
+                                errorMessage = "MONO помилка: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -301,6 +311,7 @@ fun MainScreen(
                                     }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBU error: ${e.message}", e)
+                                errorMessage = "NBU помилка: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -309,9 +320,22 @@ fun MainScreen(
                             try {
                                 val html = minfin.load()
                                 Log.d("EasyChange", "MINFIN loaded HTML: ${html.length} chars")
-                                parseMinfinHtml(html)
+                                
+                                val parsed = parseMinfinHtml(html)
+                                Log.d("EasyChange", "MINFIN parsed: ${parsed.size} rates")
+                                
+                                if (parsed.isEmpty()) {
+                                    errorMessage = "INTERBANK: не знайдено курсів у HTML"
+                                }
+                                
+                                parsed.forEach {
+                                    Log.d("EasyChange", "MINFIN: ${it.base}/${it.quote} = ${it.mid}")
+                                }
+                                
+                                parsed
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "MINFIN error: ${e.message}", e)
+                                errorMessage = "INTERBANK помилка: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -334,6 +358,7 @@ fun MainScreen(
 
                 } catch (e: Exception) {
                     Log.e("EasyChange", "General error: ${e.message}", e)
+                    errorMessage = "Загальна помилка: ${e.message}"
                 } finally {
                     isLoading = false
                 }
@@ -451,6 +476,24 @@ fun MainScreen(
         }
 
         Spacer(Modifier.height(12.dp))
+
+        // Показ помилки
+        errorMessage?.let {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp),
+                    fontSize = 12.sp
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
 
         // Індикатор завантаження
         if (isLoading) {
