@@ -413,6 +413,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "MONO" },
                         modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "MONO") 
                                 MaterialTheme.colorScheme.primary 
@@ -429,6 +430,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "NBU" },
                         modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "NBU") 
                                 MaterialTheme.colorScheme.primary 
@@ -450,6 +452,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "NBP" },
                         modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "NBP") 
                                 MaterialTheme.colorScheme.primary 
@@ -466,6 +469,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "CNB" },
                         modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "CNB") 
                                 MaterialTheme.colorScheme.primary 
@@ -555,6 +559,89 @@ fun MainScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
+            // Кроскурси
+            if (rates.isNotEmpty()) {
+                Text(
+                    "Кроскурси:",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                val crossPairs = listOf(
+                    "PLN" to "UAH",
+                    "UAH" to "USD",
+                    "USD" to "EUR"
+                )
+                
+                crossPairs.forEach { (from, to) ->
+                    val direct = convert(1.0, from, to, rates)
+                    val reverse = convert(1.0, to, from, rates)
+                    
+                    if (direct != null || reverse != null) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp)
+                            ) {
+                                if (direct != null) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("1 $from =", fontSize = 13.sp)
+                                        Text(
+                                            String.format(Locale.US, "%.4f", direct) + " $to",
+                                            fontSize = 13.sp,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                        )
+                                    }
+                                }
+                                if (reverse != null) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text("1 $to =", fontSize = 13.sp)
+                                        Text(
+                                            String.format(Locale.US, "%.4f", reverse) + " $from",
+                                            fontSize = 13.sp,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Spacer(Modifier.height(12.dp))
+                
+                // Кнопка оновлення
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Button(
+                        onClick = { refresh() },
+                        enabled = !isLoading,
+                        modifier = Modifier.width(200.dp)
+                    ) {
+                        Text(if (isLoading) "Завантаження..." else "Оновити ⟳", fontSize = 13.sp)
+                    }
+                }
+                
+                Spacer(Modifier.height(12.dp))
+            }
+
             val amountDouble = amount.toDoubleOrNull() ?: 0.0
 
             if (rates.isNotEmpty()) {
@@ -594,17 +681,6 @@ fun MainScreen(
                 }
             } else if (!isLoading) {
                 Text("Дані не завантажено", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // Кнопка оновлення
-            Button(
-                onClick = { refresh() },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isLoading
-            ) {
-                Text(if (isLoading) "Завантаження..." else "Оновити ⟳")
             }
 
             Spacer(Modifier.height(16.dp))
