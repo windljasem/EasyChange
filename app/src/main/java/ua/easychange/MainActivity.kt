@@ -16,6 +16,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import java.util.Locale
+import androidx.compose.ui.unit.sp
 
 // ------------------ MODELS ------------------
 data class Fx(val base: String, val quote: String, val buy: Double?, val sell: Double?, val mid: Double)
