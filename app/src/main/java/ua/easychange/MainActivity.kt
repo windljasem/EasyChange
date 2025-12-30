@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -73,9 +75,15 @@ interface MinfinApi {
 }
 
 interface MinfinJsonApi {
-    @GET("ua/currency/mb/")
-    suspend fun loadHtml(): String
+    @GET("p24api/pubinfo?exchange&coursid=5")
+    suspend fun load(): List<PrivatDto>
 }
+data class PrivatDto(
+    val ccy: String,
+    val base_ccy: String,
+    val buy: String,
+    val sale: String
+)
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
@@ -132,6 +140,28 @@ fun parseMinfinBanksHtml(html: String): List<Fx> {
         }
     } catch (e: Exception) {
         Log.e("EasyChange", "Minfin parsing error: ${e.message}")
+    }
+    
+    return rates
+}
+
+fun parsePrivatJson(data: List<PrivatDto>): List<Fx> {
+    val rates = mutableListOf<Fx>()
+    
+    try {
+        data.forEach { item ->
+            if (item.base_ccy == "UAH") {
+                val buy = item.buy.toDoubleOrNull()
+                val sale = item.sale.toDoubleOrNull()
+                
+                if (buy != null && sale != null && buy > 0 && sale > 0) {
+                    rates.add(Fx(item.ccy, "UAH", buy, sale, (buy + sale) / 2))
+                    Log.d("EasyChange", "PrivatBank: ${item.ccy} -> UAH = $buy/$sale")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("EasyChange", "PrivatBank parsing error: ${e.message}")
     }
     
     return rates
@@ -244,7 +274,7 @@ class MainActivity : ComponentActivity() {
             .create(NbuApi::class.java)
 
         val minfinJson = Retrofit.Builder()
-            .baseUrl("https://minfin.com.ua/")
+            .baseUrl("https://api.privatbank.ua/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(MinfinJsonApi::class.java)
@@ -375,11 +405,11 @@ fun MainScreen(
 
                         "INTERBANK" -> {
                             try {
-                                val html = minfinJson.loadHtml()
-                                Log.d("EasyChange", "MINFIN HTML loaded: ${html.length} chars")
+                                val response = minfinJson.load()
+                                Log.d("EasyChange", "PrivatBank loaded: ${response.size} rates")
                                 
-                                val parsed = parseMinfinBanksHtml(html)
-                                Log.d("EasyChange", "MINFIN parsed: ${parsed.size} rates")
+                                val parsed = parsePrivatJson(response)
+                                Log.d("EasyChange", "PrivatBank parsed: ${parsed.size} rates")
                                 
                                 if (parsed.isEmpty()) {
                                     errorMessage = "INTERBANK: не знайдено курсів"
@@ -387,7 +417,7 @@ fun MainScreen(
                                 
                                 parsed
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "MINFIN error: ${e.message}", e)
+                                Log.e("EasyChange", "PrivatBank error: ${e.message}", e)
                                 errorMessage = "INTERBANK помилка: ${e.message}"
                                 emptyList()
                             }
@@ -473,7 +503,7 @@ fun MainScreen(
             ) {
                 listOf(
                     "NBU" to "bank.gov.ua",
-                    "INTERBANK" to "minfin.com.ua"
+                    "INTERBANK" to "privatbank.ua"
                 ).forEach { (code, url) ->
                     Button(
                         onClick = { source = code },
