@@ -149,9 +149,18 @@ class MainActivity : ComponentActivity() {
             ) {
 
                 Row {
-                    listOf("KURS", "MONO", "NBU").forEach {
-                        Button(onClick = { source = it }, modifier = Modifier.padding(end = 4.dp)) {
-                            Text(it)
+                    listOf(
+                        "KURS" to "kurs.com.ua",
+                        "MONO" to "monobank.ua",
+                        "INTERBANK" to "minfin.com.ua"
+                    ).forEach { (code, url) ->
+                         Button(
+                             onClick = { source = code },
+                             modifier = Modifier.padding(end = 6.dp)
+                        ) {  
+                             Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                                 Text(code)
+                                 Text(url, fontSize = 10.sp)
                         }
                     }
                 }
