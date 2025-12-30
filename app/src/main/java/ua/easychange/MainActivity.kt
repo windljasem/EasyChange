@@ -111,24 +111,42 @@ class MainActivity : ComponentActivity() {
                 scope.launch {
                     try {
                         rates = when (source) {
-                            "KURS" -> kurs.load().data.map {
-                                Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
-                            }
 
-                            "MONO" -> mono.load().mapNotNull {
-                                val b = it.code(it.currencyCodeA)
-                                val q = it.code(it.currencyCodeB)
-                                if (b != null && q == "UAH")
+                            "KURS", "INTERBANK" -> {
+                                kurs.load().data.map {
                                     Fx(
-                                        b, q,
-                                        it.rateBuy, it.rateSell,
-                                        it.rateCross ?: ((it.rateBuy!! + it.rateSell!!) / 2)
+                                        it.base,
+                                        it.quote,
+                                        it.buy,
+                                        it.sell,
+                                        (it.buy + it.sell) / 2
                                     )
-                                else null
+                                }
                             }
 
-                            else -> nbu.load().map {
-                                Fx(it.cc, "UAH", null, null, it.rate)
+                            "MONO" -> {
+                                mono.load().mapNotNull {
+                                    val b = it.code(it.currencyCodeA)
+                                    val q = it.code(it.currencyCodeB)
+
+                                    if (b != null && q == "UAH" &&
+                                        it.rateBuy != null && it.rateSell != null
+                                    ) {
+                                        Fx(
+                                            b,
+                                            q,
+                                            it.rateBuy,
+                                            it.rateSell,
+                                            (it.rateBuy + it.rateSell) / 2
+                                        )
+                                    } else null
+                                }
+                            }
+
+                            else -> {
+                                nbu.load().map {
+                                    Fx(it.cc, "UAH", null, null, it.rate)
+                                }
                             }
                         }
 
@@ -152,16 +170,20 @@ class MainActivity : ComponentActivity() {
                     listOf(
                         "KURS" to "kurs.com.ua",
                         "MONO" to "monobank.ua",
+                        "NBU" to "bank.gov.ua",
                         "INTERBANK" to "minfin.com.ua"
                     ).forEach { (code, url) ->
-                         Button(
-                             onClick = { source = code },
-                             modifier = Modifier.padding(end = 6.dp)
-                        ) {  
-                             Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                                 Text(code)
-                                 Text(url, fontSize = 10.sp)
-                             }    
+
+                        Button(
+                            onClick = { source = code },
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                            ) {
+                                Text(code)
+                                Text(url, fontSize = 10.sp)
+                            }
                         }
                     }
                 }
@@ -176,11 +198,12 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(Modifier.height(8.dp))
 
-                listOf("EUR","PLN","UAH").forEach {
+                listOf("EUR", "PLN", "UAH").forEach { code ->
                     val v =
                         if (rates.isEmpty()) 0.0
-                        else convert(amount.toDoubleOrNull() ?: 0.0, "USD", it, rates)
-                    Text("$it  ${String.format(Locale.US, "%.2f", v)}")
+                        else convert(amount.toDoubleOrNull() ?: 0.0, "USD", code, rates)
+
+                    Text("$code  ${String.format(Locale.US, "%.2f", v)}")
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -196,3 +219,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
