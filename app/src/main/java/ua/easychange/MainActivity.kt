@@ -24,7 +24,13 @@ import java.util.Date
 import java.util.Locale
 
 // ------------------ MODELS ------------------
-data class Fx(val base: String, val quote: String, val buy: Double?, val sell: Double?, val mid: Double)
+data class Fx(
+    val base: String, 
+    val quote: String, 
+    val buy: Double?, 
+    val sell: Double?, 
+    val mid: Double
+)
 
 data class CurrencyInfo(
     val code: String,
@@ -32,23 +38,12 @@ data class CurrencyInfo(
     val name: String
 )
 
-// ------------------ API ------------------
-interface KursApi {
-    @GET("api/market/exchange-rates")
-    suspend fun load(): KursResponse
-}
-data class KursResponse(val data: List<KursDto>)
-data class KursDto(val base: String, val quote: String, val buy: Double, val sell: Double)
-
-interface KursHtmlApi {
-    @GET("currency/auction/")
-    suspend fun loadHtml(): String
-}
-
+// ------------------ API INTERFACES ------------------
 interface MonoApi {
     @GET("bank/currency")
     suspend fun load(): List<MonoDto>
 }
+
 data class MonoDto(
     val currencyCodeA: Int,
     val currencyCodeB: Int,
@@ -61,6 +56,7 @@ interface NbuApi {
     @GET("NBUStatService/v1/statdirectory/exchange?json")
     suspend fun load(): List<NbuDto>
 }
+
 data class NbuDto(
     val r030: Int? = null,
     val txt: String? = null,
@@ -69,26 +65,21 @@ data class NbuDto(
     val exchangedate: String? = null
 )
 
-interface MinfinApi {
-    @GET("ua/currency/")
+interface PrivatBankApi {
+    @GET("obmin-valiut")
     suspend fun loadHtml(): String
 }
 
-interface MinfinJsonApi {
-    @GET("p24api/pubinfo?exchange&coursid=5")
-    suspend fun load(): List<PrivatDto>
+interface PumbApi {
+    @GET("")
+    suspend fun loadHtml(): String
 }
-data class PrivatDto(
-    val ccy: String,
-    val base_ccy: String,
-    val buy: String,
-    val sale: String
-)
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
     suspend fun btc(@Query("symbol") s: String = "BTCUSDT"): BinanceDto
 }
+
 data class BinanceDto(val price: String)
 
 // ------------------ CONSTANTS ------------------
@@ -98,168 +89,157 @@ val CURRENCIES = listOf(
     CurrencyInfo("EUR", "🇪🇺", "Євро"),
     CurrencyInfo("PLN", "🇵🇱", "Злотий"),
     CurrencyInfo("GBP", "🇬🇧", "Фунт"),
-    CurrencyInfo("HRK", "🇭🇷", "Куна"),
     CurrencyInfo("CHF", "🇨🇭", "Франк"),
     CurrencyInfo("CZK", "🇨🇿", "Крона"),
-    CurrencyInfo("BGN", "🇧🇬", "Лев"),
     CurrencyInfo("CAD", "🇨🇦", "Дол. Канади"),
+    CurrencyInfo("CNY", "🇨🇳", "Юань"),
     CurrencyInfo("BTC", "₿", "Bitcoin")
 )
 
-// ------------------ UTILS ------------------
+// ------------------ UTILITY FUNCTIONS ------------------
 fun MonoDto.code(i: Int) = when (i) {
     840 -> "USD"
     978 -> "EUR"
     985 -> "PLN"
     980 -> "UAH"
     826 -> "GBP"
-    191 -> "HRK"
     756 -> "CHF"
     203 -> "CZK"
-    975 -> "BGN"
     124 -> "CAD"
+    156 -> "CNY"
     else -> null
 }
 
-fun parseMinfinBanksHtml(html: String): List<Fx> {
+fun parsePrivatHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
     try {
-        // Шукаємо курси валют у НБУ секції Minfin
-        val currencyRegex = """data-currency="([A-Z]{3})"[\s\S]*?<td[^>]*data-title="Купівля"[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*data-title="Продаж"[^>]*>([\d.]+)</td>""".toRegex()
+        // Шукаємо курси валют у таблиці
+        val currencyRegex = """data-currency="([A-Z]{3})"[\s\S]*?<td[^>]*class="[^"]*buy[^"]*"[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*class="[^"]*sell[^"]*"[^>]*>([\d.]+)</td>""".toRegex()
         
         currencyRegex.findAll(html).forEach { match ->
             val code = match.groupValues[1]
             val buy = match.groupValues[2].toDoubleOrNull()
             val sell = match.groupValues[3].toDoubleOrNull()
             
-            if (code in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK") && buy != null && sell != null && buy > 0 && sell > 0) {
+            if (buy != null && sell != null && buy > 0 && sell > 0) {
                 rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                Log.d("EasyChange", "Minfin: $code -> UAH = $buy/$sell")
+                Log.d("EasyChange", "Privat: $code -> UAH = $buy/$sell")
             }
         }
-    } catch (e: Exception) {
-        Log.e("EasyChange", "Minfin parsing error: ${e.message}")
-    }
-    
-    return rates
-}
-
-fun parsePrivatJson(data: List<PrivatDto>): List<Fx> {
-    val rates = mutableListOf<Fx>()
-    
-    try {
-        data.forEach { item ->
-            if (item.base_ccy == "UAH") {
-                val buy = item.buy.toDoubleOrNull()
-                val sale = item.sale.toDoubleOrNull()
+        
+        // Альтернативний regex якщо перший не спрацював
+        if (rates.isEmpty()) {
+            val altRegex = """<tr[^>]*data-currency="([A-Z]{3})"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
+            
+            altRegex.findAll(html).forEach { match ->
+                val code = match.groupValues[1]
+                val buy = match.groupValues[2].toDoubleOrNull()
+                val sell = match.groupValues[3].toDoubleOrNull()
                 
-                if (buy != null && sale != null && buy > 0 && sale > 0) {
-                    rates.add(Fx(item.ccy, "UAH", buy, sale, (buy + sale) / 2))
-                    Log.d("EasyChange", "PrivatBank: ${item.ccy} -> UAH = $buy/$sale")
+                if (buy != null && sell != null && buy > 0 && sell > 0) {
+                    rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
+                    Log.d("EasyChange", "Privat (alt): $code -> UAH = $buy/$sell")
                 }
             }
         }
     } catch (e: Exception) {
-        Log.e("EasyChange", "PrivatBank parsing error: ${e.message}")
+        Log.e("EasyChange", "Privat parsing error: ${e.message}")
     }
     
     return rates
 }
 
-fun parseKursHtml(html: String): List<Fx> {
+fun parsePumbHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
     
     try {
-        // Шукаємо таблицю міжбанку з класом auction-table
-        val rowRegex = """<tr[^>]*>[\s\S]*?<td[^>]*>([A-Z]{3})</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
+        // Шукаємо курси валют на сайті PUMB
+        val currencyRegex = """data-code="([A-Z]{3})"[\s\S]*?data-buy="([\d.]+)"[\s\S]*?data-sell="([\d.]+)"""".toRegex()
         
-        rowRegex.findAll(html).forEach { match ->
+        currencyRegex.findAll(html).forEach { match ->
             val code = match.groupValues[1]
             val buy = match.groupValues[2].toDoubleOrNull()
             val sell = match.groupValues[3].toDoubleOrNull()
             
-            if (code in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK") && buy != null && sell != null && buy > 0 && sell > 0) {
+            if (buy != null && sell != null && buy > 0 && sell > 0) {
                 rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
-                Log.d("EasyChange", "Kurs: $code -> UAH = $buy/$sell")
+                Log.d("EasyChange", "PUMB: $code -> UAH = $buy/$sell")
             }
         }
-    } catch (e: Exception) {
-        Log.e("EasyChange", "Kurs HTML parsing error: ${e.message}")
-    }
-    
-    return rates
-}
-
-fun parseMinfinHtml(html: String): List<Fx> {
-    val rates = mutableListOf<Fx>()
-    val currencies = listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK")
-    
-    try {
-        for (curr in currencies) {
-            val regex = """data-currency="$curr"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
-            val match = regex.find(html)
-            if (match != null) {
-                val buy = match.groupValues[1].toDoubleOrNull()
-                val sell = match.groupValues[2].toDoubleOrNull()
+        
+        // Альтернативний regex - таблиця
+        if (rates.isEmpty()) {
+            val tableRegex = """<tr[^>]*>[\s\S]*?<td[^>]*>([A-Z]{3})</td>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
+            
+            tableRegex.findAll(html).forEach { match ->
+                val code = match.groupValues[1]
+                val buy = match.groupValues[2].toDoubleOrNull()
+                val sell = match.groupValues[3].toDoubleOrNull()
+                
                 if (buy != null && sell != null && buy > 0 && sell > 0) {
-                    rates.add(Fx(curr, "UAH", buy, sell, (buy + sell) / 2))
+                    rates.add(Fx(code, "UAH", buy, sell, (buy + sell) / 2))
+                    Log.d("EasyChange", "PUMB (table): $code -> UAH = $buy/$sell")
                 }
             }
         }
     } catch (e: Exception) {
-        Log.e("EasyChange", "Minfin parsing error: ${e.message}")
+        Log.e("EasyChange", "PUMB parsing error: ${e.message}")
     }
     
     return rates
 }
 
-fun convert(a: Double, from: String, to: String, r: List<Fx>): Double? {
-    if (from == to) return a
+fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? {
+    if (from == to) return amount
+    if (amount == 0.0) return 0.0
     
-    r.firstOrNull { it.base == from && it.quote == to }?.let { 
-        return a * it.mid 
+    // Пряма конвертація
+    rates.firstOrNull { it.base == from && it.quote == to }?.let { 
+        return amount * it.mid 
     }
     
-    r.firstOrNull { it.base == to && it.quote == from }?.let { 
-        return a / it.mid 
+    // Зворотна конвертація
+    rates.firstOrNull { it.base == to && it.quote == from }?.let { 
+        return amount / it.mid 
     }
     
     // Через UAH
-    val fromUah = r.firstOrNull { it.base == from && it.quote == "UAH" }
-    val toUah = r.firstOrNull { it.base == to && it.quote == "UAH" }
+    val fromRate = rates.firstOrNull { it.base == from && it.quote == "UAH" }
+    val toRate = rates.firstOrNull { it.base == to && it.quote == "UAH" }
     
-    if (fromUah != null && toUah != null) {
-        val uahAmount = a * fromUah.mid
-        return uahAmount / toUah.mid
+    if (fromRate != null && toRate != null) {
+        val uahAmount = amount * fromRate.mid
+        return uahAmount / toRate.mid
     }
     
     // Через USD
-    val toUsd = r.firstOrNull { it.base == from && it.quote == "USD" }
-        ?: r.firstOrNull { it.quote == from && it.base == "USD" }
+    val fromToUsd = rates.firstOrNull { it.base == from && it.quote == "USD" }
+        ?: rates.firstOrNull { it.base == "USD" && it.quote == from }
+    val toFromUsd = rates.firstOrNull { it.base == to && it.quote == "USD" }
+        ?: rates.firstOrNull { it.base == "USD" && it.quote == to }
     
-    val fromUsd = r.firstOrNull { it.base == "USD" && it.quote == to }
-        ?: r.firstOrNull { it.quote == "USD" && it.base == to }
-    
-    if (toUsd != null && fromUsd != null) {
-        val usdAmount = if (toUsd.base == from) a * toUsd.mid else a / toUsd.mid
-        return if (fromUsd.base == "USD") usdAmount * fromUsd.mid else usdAmount / fromUsd.mid
+    if (fromToUsd != null && toFromUsd != null) {
+        val usdAmount = if (fromToUsd.base == from) {
+            amount * fromToUsd.mid
+        } else {
+            amount / fromToUsd.mid
+        }
+        
+        return if (toFromUsd.base == to) {
+            usdAmount / toFromUsd.mid
+        } else {
+            usdAmount * toFromUsd.mid
+        }
     }
     
     return null
 }
 
-// ------------------ ACTIVITY ------------------
+// ------------------ MAIN ACTIVITY ------------------
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val kursHtml = Retrofit.Builder()
-            .baseUrl("https://kurs.com.ua/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(KursHtmlApi::class.java)
 
         val mono = Retrofit.Builder()
             .baseUrl("https://api.monobank.ua/")
@@ -273,11 +253,17 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val minfinJson = Retrofit.Builder()
-            .baseUrl("https://api.privatbank.ua/")
+        val privat = Retrofit.Builder()
+            .baseUrl("https://privatbank.ua/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(MinfinJsonApi::class.java)
+            .create(PrivatBankApi::class.java)
+
+        val pumb = Retrofit.Builder()
+            .baseUrl("https://www.pumb.ua/")
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(PumbApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -291,26 +277,26 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(kursHtml, mono, nbu, minfinJson, binance)
+                    MainScreen(mono, nbu, privat, pumb, binance)
                 }
             }
         }
     }
 }
 
+// ------------------ MAIN SCREEN ------------------
 @Composable
 fun MainScreen(
-    kursHtml: KursHtmlApi,
     mono: MonoApi,
     nbu: NbuApi,
-    minfinJson: MinfinJsonApi,
+    privat: PrivatBankApi,
+    pumb: PumbApi,
     binance: BinanceApi
 ) {
-    var source by remember { mutableStateOf("KURS") }
+    var source by remember { mutableStateOf("MONO") }
     var baseCurrency by remember { mutableStateOf("USD") }
     var amount by remember { mutableStateOf("1") }
     var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
-    var btc by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -324,25 +310,21 @@ fun MainScreen(
             
             withContext(Dispatchers.IO) {
                 try {
-                    Log.d("EasyChange", "Loading rates from: $source")
+                    Log.d("EasyChange", "Loading from: $source")
                     
                     rates = when (source) {
-                        "KURS" -> {
+                        "PUMB" -> {
                             try {
-                                val html = kursHtml.loadHtml()
-                                Log.d("EasyChange", "KURS HTML loaded: ${html.length} chars")
-                                
-                                val parsed = parseKursHtml(html)
-                                Log.d("EasyChange", "KURS parsed: ${parsed.size} rates")
-                                
+                                val html = pumb.loadHtml()
+                                Log.d("EasyChange", "PUMB: ${html.length} chars")
+                                val parsed = parsePumbHtml(html)
                                 if (parsed.isEmpty()) {
-                                    errorMessage = "KURS: не знайдено курсів у HTML"
+                                    errorMessage = "PUMB: не знайдено курсів"
                                 }
-                                
                                 parsed
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "KURS error: ${e.message}", e)
-                                errorMessage = "KURS помилка: ${e.message}"
+                                Log.e("EasyChange", "PUMB error: ${e.message}", e)
+                                errorMessage = "PUMB: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -350,33 +332,24 @@ fun MainScreen(
                         "MONO" -> {
                             try {
                                 val response = mono.load()
-                                Log.d("EasyChange", "MONO loaded: ${response.size} rates")
+                                Log.d("EasyChange", "MONO: ${response.size} items")
                                 
                                 response.mapNotNull {
-                                    val b = it.code(it.currencyCodeA)
-                                    val q = it.code(it.currencyCodeB)
+                                    val base = it.code(it.currencyCodeA)
+                                    val quote = it.code(it.currencyCodeB)
                                     
-                                    if (b != null && q == "UAH") {
-                                        val buy = it.rateBuy
-                                        val sell = it.rateSell
-                                        val cross = it.rateCross
+                                    if (base != null && quote == "UAH") {
+                                        val mid = it.rateCross 
+                                            ?: ((it.rateBuy ?: 0.0) + (it.rateSell ?: 0.0)) / 2
                                         
-                                        val mid = when {
-                                            cross != null && cross > 0 -> cross
-                                            buy != null && sell != null && buy > 0 && sell > 0 -> (buy + sell) / 2
-                                            buy != null && buy > 0 -> buy
-                                            sell != null && sell > 0 -> sell
-                                            else -> null
-                                        }
-                                        
-                                        if (mid != null && mid > 0) {
-                                            Fx(b, q, buy, sell, mid)
+                                        if (mid > 0) {
+                                            Fx(base, quote, it.rateBuy, it.rateSell, mid)
                                         } else null
                                     } else null
                                 }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "MONO error: ${e.message}", e)
-                                errorMessage = "MONO помилка: ${e.message}"
+                                errorMessage = "MONO: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -384,41 +357,30 @@ fun MainScreen(
                         "NBU" -> {
                             try {
                                 val response = nbu.load()
-                                Log.d("EasyChange", "NBU loaded: ${response.size} rates")
+                                Log.d("EasyChange", "NBU: ${response.size} items")
                                 
                                 response
-                                    .filter { 
-                                        it.cc != null && 
-                                        it.rate != null && 
-                                        it.rate > 0 &&
-                                        it.cc in CURRENCIES.map { c -> c.code }
-                                    }
-                                    .map {
-                                        Fx(it.cc!!, "UAH", null, null, it.rate!!)
-                                    }
+                                    .filter { it.cc != null && it.rate != null && it.rate > 0 }
+                                    .map { Fx(it.cc!!, "UAH", null, null, it.rate!!) }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBU error: ${e.message}", e)
-                                errorMessage = "NBU помилка: ${e.message}"
+                                errorMessage = "NBU: ${e.message}"
                                 emptyList()
                             }
                         }
 
-                        "INTERBANK" -> {
+                        "PRIVATBANK" -> {
                             try {
-                                val response = minfinJson.load()
-                                Log.d("EasyChange", "PrivatBank loaded: ${response.size} rates")
-                                
-                                val parsed = parsePrivatJson(response)
-                                Log.d("EasyChange", "PrivatBank parsed: ${parsed.size} rates")
-                                
+                                val html = privat.loadHtml()
+                                Log.d("EasyChange", "PrivatBank: ${html.length} chars")
+                                val parsed = parsePrivatHtml(html)
                                 if (parsed.isEmpty()) {
-                                    errorMessage = "INTERBANK: не знайдено курсів"
+                                    errorMessage = "PrivatBank: не знайдено курсів"
                                 }
-                                
                                 parsed
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "PrivatBank error: ${e.message}", e)
-                                errorMessage = "INTERBANK помилка: ${e.message}"
+                                errorMessage = "PrivatBank: ${e.message}"
                                 emptyList()
                             }
                         }
@@ -426,28 +388,25 @@ fun MainScreen(
                         else -> emptyList()
                     }
 
-                    if (rates.isNotEmpty()) {
-                        val dateFormat = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
-                        lastUpdate = "Курс оновлено ${dateFormat.format(Date())}"
-                    }
-
+                    // Додаємо BTC
                     try {
-                        val btcResponse = binance.btc()
-                        btc = btcResponse.price.toDoubleOrNull()
-                        
-                        // Додаємо BTC до курсів якщо він є
-                        if (btc != null && btc!! > 0) {
-                            rates = rates + Fx("BTC", "USD", null, null, btc!!)
-                            Log.d("EasyChange", "BTC added: $btc USD")
+                        val btcPrice = binance.btc().price.toDoubleOrNull()
+                        if (btcPrice != null && btcPrice > 0) {
+                            rates = rates + Fx("BTC", "USD", null, null, btcPrice)
+                            Log.d("EasyChange", "BTC: $btcPrice USD")
                         }
                     } catch (e: Exception) {
-                        Log.e("EasyChange", "BTC error: ${e.message}", e)
-                        btc = null
+                        Log.e("EasyChange", "BTC error: ${e.message}")
+                    }
+
+                    if (rates.isNotEmpty()) {
+                        val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
+                        lastUpdate = "Курс оновлено ${format.format(Date())}"
                     }
 
                 } catch (e: Exception) {
-                    Log.e("EasyChange", "General error: ${e.message}", e)
-                    errorMessage = "Загальна помилка: ${e.message}"
+                    Log.e("EasyChange", "Error: ${e.message}", e)
+                    errorMessage = "Помилка: ${e.message}"
                 } finally {
                     isLoading = false
                 }
@@ -457,218 +416,214 @@ fun MainScreen(
 
     LaunchedEffect(source) { refresh() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-    ) {
-        // Верхня частина (кнопки + поле) - не скролиться
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-        // Кнопки джерел - 2 ряди по 2
-        Column(
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    "KURS" to "kurs.com.ua",
-                    "MONO" to "monobank.ua"
-                ).forEach { (code, url) ->
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Верхня частина - не скролиться
+        Column(modifier = Modifier.padding(16.dp)) {
+            // Кнопки джерел
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Button(
-                        onClick = { source = code },
+                        onClick = { source = "PUMB" },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == code) 
+                            containerColor = if (source == "PUMB") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
-                        Column(
-                            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
-                        ) {
-                            Text(code, fontSize = 13.sp)
-                            Text(url, fontSize = 8.sp)
+                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Text("PUMB", fontSize = 13.sp)
+                            Text("pumb.ua", fontSize = 8.sp)
                         }
                     }
-                }
-            }
-            
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                listOf(
-                    "NBU" to "bank.gov.ua",
-                    "INTERBANK" to "privatbank.ua"
-                ).forEach { (code, url) ->
+                    
                     Button(
-                        onClick = { source = code },
+                        onClick = { source = "MONO" },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == code) 
+                            containerColor = if (source == "MONO") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
-                        Column(
-                            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
-                        ) {
-                            Text(code, fontSize = 13.sp)
-                            Text(url, fontSize = 8.sp, lineHeight = 10.sp)
+                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Text("MONO", fontSize = 13.sp)
+                            Text("monobank.ua", fontSize = 8.sp)
+                        }
+                    }
+                }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Button(
+                        onClick = { source = "NBU" },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (source == "NBU") 
+                                MaterialTheme.colorScheme.primary 
+                            else 
+                                MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Text("NBU", fontSize = 13.sp)
+                            Text("bank.gov.ua", fontSize = 8.sp)
+                        }
+                    }
+                    
+                    Button(
+                        onClick = { source = "PRIVATBANK" },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (source == "PRIVATBANK") 
+                                MaterialTheme.colorScheme.primary 
+                            else 
+                                MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Text("PrivatBank", fontSize = 12.sp)
+                            Text("privatbank.ua", fontSize = 8.sp)
                         }
                     }
                 }
             }
-        }
 
-        Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(12.dp))
 
-        // Час останнього оновлення
-        lastUpdate?.let {
-            Text(
-                text = it,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(8.dp))
-        }
-
-        // Поле введення з вибором валюти
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = amount,
-                onValueChange = { newValue ->
-                    if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
-                        amount = newValue
-                    }
-                },
-                label = { 
-                    val curr = CURRENCIES.find { it.code == baseCurrency }
-                    Text("${curr?.flag ?: ""} $baseCurrency")
-                },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                enabled = !isLoading
-            )
-            
-            Button(
-                onClick = { showCurrencyPicker = true },
-                modifier = Modifier.height(56.dp)
-            ) {
-                Text("⚙")
+            // Час оновлення
+            lastUpdate?.let {
+                Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
             }
-        }
 
-        Spacer(Modifier.height(12.dp))
-
-        // Показ помилки
-        errorMessage?.let {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
+            // Поле введення
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(12.dp),
-                    fontSize = 12.sp
+                OutlinedTextField(
+                    value = amount,
+                    onValueChange = { 
+                        if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d*$"))) {
+                            amount = it
+                        }
+                    },
+                    label = { 
+                        val curr = CURRENCIES.find { it.code == baseCurrency }
+                        Text("${curr?.flag ?: ""} $baseCurrency")
+                    },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    enabled = !isLoading
                 )
+                
+                Button(
+                    onClick = { showCurrencyPicker = true },
+                    modifier = Modifier.height(56.dp)
+                ) {
+                    Text("⚙")
+                }
             }
-            Spacer(Modifier.height(8.dp))
+
+            Spacer(Modifier.height(12.dp))
+
+            // Помилка
+            errorMessage?.let {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp),
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Завантаження
+            if (isLoading) {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Завантаження...", fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+            }
         }
 
-        // Індикатор завантаження
-        if (isLoading) {
-            Row(
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Завантаження...", fontSize = 12.sp)
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-
-        // Скроліться список валют
+        // Список валют - скролиться
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
+            val amountDouble = amount.toDoubleOrNull() ?: 0.0
 
-        // Конвертовані валюти
-        val amountDouble = amount.toDoubleOrNull() ?: 0.0
+            if (rates.isNotEmpty()) {
+                CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
+                    val value = convert(amountDouble, baseCurrency, curr.code, rates)
 
-        if (rates.isNotEmpty()) {
-            CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
-                val value = try {
-                    if (amountDouble == 0.0) null
-                    else convert(amountDouble, baseCurrency, curr.code, rates)
-                } catch (e: Exception) {
-                    Log.e("EasyChange", "Conversion error for ${curr.code}: ${e.message}")
-                    null
-                }
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 3.dp)
-                ) {
-                    Row(
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(vertical = 3.dp)
                     ) {
-                        Text(
-                            text = "${curr.flag} ${curr.code}",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            text = if (value != null) {
-                                String.format(Locale.US, "%.2f", value)
-                            } else {
-                                "НЕ ВИЗНАЧЕНО"
-                            },
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (value != null) 
-                                MaterialTheme.colorScheme.onSurface 
-                            else 
-                                MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = if (value != null) 16.sp else 12.sp
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "${curr.flag} ${curr.code}",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                if (value != null) {
+                                    String.format(Locale.US, "%.2f", value)
+                                } else {
+                                    "НЕ ВИЗНАЧЕНО"
+                                },
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (value != null) 
+                                    MaterialTheme.colorScheme.onSurface 
+                                else 
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = if (value != null) 16.sp else 12.sp
+                            )
+                        }
                     }
                 }
+            } else if (!isLoading) {
+                Text("Дані не завантажено", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
             }
-        } else if (!isLoading) {
-            Text("Дані не завантажено", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-        }
 
-        Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(12.dp))
 
-        // Кнопка оновлення
-        Button(
-            onClick = { refresh() },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading
-        ) {
-            Text(if (isLoading) "Завантаження..." else "Оновити ⟳")
+            // Кнопка оновлення
+            Button(
+                onClick = { refresh() },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isLoading
+            ) {
+                Text(if (isLoading) "Завантаження..." else "Оновити ⟳")
+            }
+
+            Spacer(Modifier.height(16.dp))
         }
-        
-        Spacer(Modifier.height(16.dp))
-    }
     }
 
     // Діалог вибору валюти
