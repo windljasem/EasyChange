@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(api: KursApi) {
 
+    var source by remember { mutableStateOf("KURS") }
     var usdRate by remember { mutableStateOf<Double?>(null) }
     var lastUpdated by remember { mutableStateOf<Long?>(null) }
     var amount by remember { mutableStateOf("100") }
@@ -86,7 +87,7 @@ fun MainScreen(api: KursApi) {
                         lastUpdated = System.currentTimeMillis()
                     }
                 } catch (_: Exception) {
-                    // НІЧОГО не робимо — залишаємо старі дані
+                    // не чистимо дані
                 } finally {
                     loading = false
                 }
@@ -94,7 +95,7 @@ fun MainScreen(api: KursApi) {
         }
     }
 
-    LaunchedEffect(Unit) { refresh() }
+    LaunchedEffect(source) { refresh() }
 
     val uah = (amount.toDoubleOrNull() ?: 0.0) * (usdRate ?: 0.0)
 
@@ -104,9 +105,25 @@ fun MainScreen(api: KursApi) {
             .padding(16.dp)
     ) {
 
-        Text("USD → UAH", fontSize = 18.sp)
+        // Кнопки джерел
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("KURS","MONO","NBU","INTERBANK").forEach {
+                Button(
+                    onClick = { source = it },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (source == it)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Text(it, fontSize = 12.sp)
+                }
+            }
+        }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
 
         OutlinedTextField(
             value = amount,
