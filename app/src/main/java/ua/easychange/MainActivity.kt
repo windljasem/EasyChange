@@ -83,12 +83,6 @@ data class NbpRate(
     val mid: Double
 )
 
-interface CnbApi {
-    @GET("en/financial-markets/foreign-exchange-market/central-bank-exchange-rate-fixing/central-bank-exchange-rate-fixing/daily.txt")
-    @retrofit2.http.Streaming
-    suspend fun load(): okhttp3.ResponseBody
-}
-
 interface ExchangeRateApi {
     @GET("v6/latest/USD")
     suspend fun load(): ExchangeRateResponse
@@ -134,35 +128,6 @@ fun MonoDto.code(i: Int) = when (i) {
     else -> null
 }
 
-fun parseCnbTxt(txt: String): List<Fx> {
-    val rates = mutableListOf<Fx>()
-    
-    try {
-        val lines = txt.split("\n")
-        
-        // Пропускаємо перші 2 рядки (дата і заголовок)
-        lines.drop(2).forEach { line ->
-            val parts = line.split("|")
-            if (parts.size >= 5) {
-                val code = parts[3].trim()
-                val amount = parts[2].trim().toDoubleOrNull() ?: 1.0
-                val rate = parts[4].trim().toDoubleOrNull()
-                
-                if (rate != null && rate > 0) {
-                    // CNB дає курс CZK до валюти, тому перераховуємо
-                    val actualRate = rate / amount
-                    rates.add(Fx(code, "CZK", null, null, actualRate))
-                    Log.d("EasyChange", "CNB: $code -> CZK = $actualRate")
-                }
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("EasyChange", "CNB parsing error: ${e.message}")
-    }
-    
-    return rates
-}
-
 fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? {
     if (from == to) return amount
     if (amount == 0.0) return 0.0
@@ -186,22 +151,13 @@ fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? 
         return uahAmount / toUah.mid
     }
     
-    // Через PLN (для NBP)
+    // Через PLN
     val fromPln = rates.firstOrNull { it.base == from && it.quote == "PLN" }
     val toPln = rates.firstOrNull { it.base == to && it.quote == "PLN" }
     
     if (fromPln != null && toPln != null) {
         val plnAmount = amount * fromPln.mid
         return plnAmount / toPln.mid
-    }
-    
-    // Через CZK (для CNB)
-    val fromCzk = rates.firstOrNull { it.base == from && it.quote == "CZK" }
-    val toCzk = rates.firstOrNull { it.base == to && it.quote == "CZK" }
-    
-    if (fromCzk != null && toCzk != null) {
-        val czkAmount = amount * fromCzk.mid
-        return czkAmount / toCzk.mid
     }
     
     // Через USD
@@ -250,11 +206,6 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbpApi::class.java)
 
-        val cnb = Retrofit.Builder()
-            .baseUrl("https://www.cnb.cz/")
-            .build()
-            .create(CnbApi::class.java)
-
         val exchangeRate = Retrofit.Builder()
             .baseUrl("https://open.exchangerate-api.com/")
             .addConverterFactory(GsonConverterFactory.create())
@@ -273,7 +224,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(mono, nbu, nbp, cnb, exchangeRate, binance)
+                    MainScreen(mono, nbu, nbp, exchangeRate, binance)
                 }
             }
         }
@@ -286,7 +237,6 @@ fun MainScreen(
     mono: MonoApi,
     nbu: NbuApi,
     nbp: NbpApi,
-    cnb: CnbApi,
     exchangeRate: ExchangeRateApi,
     binance: BinanceApi
 ) {
@@ -370,23 +320,6 @@ fun MainScreen(
                             }
                         }
 
-                        "CNB" -> {
-                            try {
-                                val response = cnb.load()
-                                val txt = response.string()
-                                Log.d("EasyChange", "CNB: ${txt.length} chars")
-                                val parsed = parseCnbTxt(txt)
-                                if (parsed.isEmpty()) {
-                                    errorMessage = "CNB: не знайдено курсів"
-                                }
-                                parsed
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "CNB error: ${e.message}", e)
-                                errorMessage = "CNB: ${e.message}"
-                                emptyList()
-                            }
-                        }
-
                         "EXRATE" -> {
                             try {
                                 val response = exchangeRate.load()
@@ -436,7 +369,7 @@ fun MainScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         // Верхня частина - не скролиться
         Column(modifier = Modifier.padding(16.dp)) {
-            // Кнопки джерел
+            // Кнопки джерел - зменшена висота
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -501,7 +434,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "EXRATE" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "EXRATE") 
                                 MaterialTheme.colorScheme.primary 
@@ -525,7 +458,45 @@ fun MainScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Поле введення
+            // Кроскурс USD/EUR над полем введення
+            if (rates.isNotEmpty()) {
+                val usdToEur = convert(1.0, "USD", "EUR", rates)
+                val eurToUsd = convert(1.0, "EUR", "USD", rates)
+                
+                if (usdToEur != null || eurToUsd != null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            if (usdToEur != null) {
+                                Text(
+                                    "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
+                                    fontSize = 12.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                )
+                            }
+                            if (eurToUsd != null) {
+                                Text(
+                                    "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
+                                    fontSize = 12.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+
+            // Поле введення з прапором зліва і кнопкою оновлення справа
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -537,9 +508,12 @@ fun MainScreen(
                             amount = it
                         }
                     },
-                    label = { 
+                    label = { Text(baseCurrency) },
+                    leadingIcon = {
                         val curr = CURRENCIES.find { it.code == baseCurrency }
-                        Text("${curr?.flag ?: ""} $baseCurrency")
+                        IconButton(onClick = { showCurrencyPicker = true }) {
+                            Text(curr?.flag ?: "🏳", fontSize = 24.sp)
+                        }
                     },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
@@ -547,10 +521,12 @@ fun MainScreen(
                 )
                 
                 Button(
-                    onClick = { showCurrencyPicker = true },
-                    modifier = Modifier.height(56.dp)
+                    onClick = { refresh() },
+                    modifier = Modifier.height(56.dp),
+                    enabled = !isLoading,
+                    contentPadding = PaddingValues(horizontal = 16.dp)
                 ) {
-                    Text("⚙")
+                    Text("⟳", fontSize = 20.sp)
                 }
             }
 
