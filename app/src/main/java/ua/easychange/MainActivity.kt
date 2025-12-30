@@ -24,6 +24,12 @@ import java.util.Locale
 // ------------------ MODELS ------------------
 data class Fx(val base: String, val quote: String, val buy: Double?, val sell: Double?, val mid: Double)
 
+data class CurrencyInfo(
+    val code: String,
+    val flag: String,
+    val name: String
+)
+
 // ------------------ API ------------------
 interface KursApi {
     @GET("api/market/exchange-rates")
@@ -67,52 +73,51 @@ interface BinanceApi {
 }
 data class BinanceDto(val price: String)
 
+// ------------------ CONSTANTS ------------------
+val CURRENCIES = listOf(
+    CurrencyInfo("UAH", "🇺🇦", "Гривня"),
+    CurrencyInfo("USD", "🇺🇸", "Долар США"),
+    CurrencyInfo("EUR", "🇪🇺", "Євро"),
+    CurrencyInfo("PLN", "🇵🇱", "Злотий"),
+    CurrencyInfo("GBP", "🇬🇧", "Фунт"),
+    CurrencyInfo("HRK", "🇭🇷", "Куна"),
+    CurrencyInfo("CHF", "🇨🇭", "Франк"),
+    CurrencyInfo("CZK", "🇨🇿", "Крона"),
+    CurrencyInfo("BGN", "🇧🇬", "Лев"),
+    CurrencyInfo("CAD", "🇨🇦", "Дол. Канади")
+)
+
 // ------------------ UTILS ------------------
 fun MonoDto.code(i: Int) = when (i) {
     840 -> "USD"
     978 -> "EUR"
     985 -> "PLN"
     980 -> "UAH"
+    826 -> "GBP"
+    191 -> "HRK"
+    756 -> "CHF"
+    203 -> "CZK"
+    975 -> "BGN"
+    124 -> "CAD"
     else -> null
 }
 
 fun parseMinfinHtml(html: String): List<Fx> {
     val rates = mutableListOf<Fx>()
+    val currencies = listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK")
     
     try {
-        // Парсимо HTML для USD
-        val usdBuyRegex = """data-currency="USD"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
-        val usdMatch = usdBuyRegex.find(html)
-        if (usdMatch != null) {
-            val buy = usdMatch.groupValues[1].toDoubleOrNull()
-            val sell = usdMatch.groupValues[2].toDoubleOrNull()
-            if (buy != null && sell != null) {
-                rates.add(Fx("USD", "UAH", buy, sell, (buy + sell) / 2))
+        for (curr in currencies) {
+            val regex = """data-currency="$curr"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
+            val match = regex.find(html)
+            if (match != null) {
+                val buy = match.groupValues[1].toDoubleOrNull()
+                val sell = match.groupValues[2].toDoubleOrNull()
+                if (buy != null && sell != null && buy > 0 && sell > 0) {
+                    rates.add(Fx(curr, "UAH", buy, sell, (buy + sell) / 2))
+                }
             }
         }
-        
-        // EUR
-        val eurRegex = """data-currency="EUR"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
-        val eurMatch = eurRegex.find(html)
-        if (eurMatch != null) {
-            val buy = eurMatch.groupValues[1].toDoubleOrNull()
-            val sell = eurMatch.groupValues[2].toDoubleOrNull()
-            if (buy != null && sell != null) {
-                rates.add(Fx("EUR", "UAH", buy, sell, (buy + sell) / 2))
-            }
-        }
-        
-        // PLN
-        val plnRegex = """data-currency="PLN"[^>]*>[\s\S]*?<td[^>]*>([\d.]+)</td>[\s\S]*?<td[^>]*>([\d.]+)</td>""".toRegex()
-        val plnMatch = plnRegex.find(html)
-        if (plnMatch != null) {
-            val buy = plnMatch.groupValues[1].toDoubleOrNull()
-            val sell = plnMatch.groupValues[2].toDoubleOrNull()
-            if (buy != null && sell != null) {
-                rates.add(Fx("PLN", "UAH", buy, sell, (buy + sell) / 2))
-            }
-        }
-        
     } catch (e: Exception) {
         Log.e("EasyChange", "Minfin parsing error: ${e.message}")
     }
@@ -120,7 +125,7 @@ fun parseMinfinHtml(html: String): List<Fx> {
     return rates
 }
 
-fun convert(a: Double, from: String, to: String, r: List<Fx>): Double {
+fun convert(a: Double, from: String, to: String, r: List<Fx>): Double? {
     if (from == to) return a
     
     r.firstOrNull { it.base == from && it.quote == to }?.let { 
@@ -131,6 +136,16 @@ fun convert(a: Double, from: String, to: String, r: List<Fx>): Double {
         return a / it.mid 
     }
     
+    // Через UAH
+    val fromUah = r.firstOrNull { it.base == from && it.quote == "UAH" }
+    val toUah = r.firstOrNull { it.base == to && it.quote == "UAH" }
+    
+    if (fromUah != null && toUah != null) {
+        val uahAmount = a * fromUah.mid
+        return uahAmount / toUah.mid
+    }
+    
+    // Через USD
     val toUsd = r.firstOrNull { it.base == from && it.quote == "USD" }
         ?: r.firstOrNull { it.quote == from && it.base == "USD" }
     
@@ -142,7 +157,7 @@ fun convert(a: Double, from: String, to: String, r: List<Fx>): Double {
         return if (fromUsd.base == "USD") usdAmount * fromUsd.mid else usdAmount / fromUsd.mid
     }
     
-    return 0.0
+    return null
 }
 
 // ------------------ ACTIVITY ------------------
@@ -203,11 +218,13 @@ fun MainScreen(
     binance: BinanceApi
 ) {
     var source by remember { mutableStateOf("KURS") }
+    var baseCurrency by remember { mutableStateOf("USD") }
     var amount by remember { mutableStateOf("100") }
     var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
     var btc by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
+    var showCurrencyPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun refresh() {
@@ -223,9 +240,11 @@ fun MainScreen(
                             try {
                                 val response = kurs.load()
                                 Log.d("EasyChange", "KURS loaded: ${response.data.size} rates")
-                                response.data.map {
-                                    Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
-                                }
+                                response.data
+                                    .filter { it.buy > 0 && it.sell > 0 }
+                                    .map {
+                                        Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
+                                    }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "KURS error: ${e.message}", e)
                                 emptyList()
@@ -274,7 +293,8 @@ fun MainScreen(
                                     .filter { 
                                         it.cc != null && 
                                         it.rate != null && 
-                                        it.cc in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CAD", "CZK", "BGN", "HRK") 
+                                        it.rate > 0 &&
+                                        it.cc in CURRENCIES.map { c -> c.code }
                                     }
                                     .map {
                                         Fx(it.cc!!, "UAH", null, null, it.rate!!)
@@ -299,7 +319,6 @@ fun MainScreen(
                         else -> emptyList()
                     }
 
-                    // Оновлюємо час тільки якщо є дані
                     if (rates.isNotEmpty()) {
                         val dateFormat = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
                         lastUpdate = "Курс оновлено ${dateFormat.format(Date())}"
@@ -329,7 +348,7 @@ fun MainScreen(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // Кнопки джерел - 2 ряди по 2
+        // Кнопки джерел
         Column(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -367,7 +386,7 @@ fun MainScreen(
             ) {
                 listOf(
                     "NBU" to "bank.gov.ua",
-                    "INTERBANK" to "iBank\nminfin.com.ua"
+                    "INTERBANK" to "minfin.com.ua"
                 ).forEach { (code, url) ->
                     Button(
                         onClick = { source = code },
@@ -402,19 +421,34 @@ fun MainScreen(
             Spacer(Modifier.height(8.dp))
         }
 
-        // Поле введення
-        OutlinedTextField(
-            value = amount,
-            onValueChange = { newValue ->
-                if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
-                    amount = newValue
-                }
-            },
-            label = { Text("USD") },
+        // Поле введення з вибором валюти
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            enabled = !isLoading
-        )
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = amount,
+                onValueChange = { newValue ->
+                    if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                        amount = newValue
+                    }
+                },
+                label = { 
+                    val curr = CURRENCIES.find { it.code == baseCurrency }
+                    Text("${curr?.flag ?: ""} $baseCurrency")
+                },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                enabled = !isLoading
+            )
+            
+            Button(
+                onClick = { showCurrencyPicker = true },
+                modifier = Modifier.height(56.dp)
+            ) {
+                Text("⚙")
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
 
@@ -434,16 +468,13 @@ fun MainScreen(
         val amountDouble = amount.toDoubleOrNull() ?: 0.0
 
         if (rates.isNotEmpty()) {
-            listOf("EUR", "PLN", "UAH").forEach { code ->
+            CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
                 val value = try {
-                    if (amountDouble == 0.0) {
-                        0.0
-                    } else {
-                        convert(amountDouble, "USD", code, rates)
-                    }
+                    if (amountDouble == 0.0) null
+                    else convert(amountDouble, baseCurrency, curr.code, rates)
                 } catch (e: Exception) {
-                    Log.e("EasyChange", "Conversion error for $code: ${e.message}")
-                    0.0
+                    Log.e("EasyChange", "Conversion error for ${curr.code}: ${e.message}")
+                    null
                 }
 
                 Card(
@@ -458,18 +489,26 @@ fun MainScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = code,
+                            text = "${curr.flag} ${curr.code}",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = String.format(Locale.US, "%.2f", value),
-                            style = MaterialTheme.typography.bodyLarge
+                            text = if (value != null) {
+                                String.format(Locale.US, "%.2f", value)
+                            } else {
+                                "НЕ ВИЗНАЧЕНО"
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (value != null) 
+                                MaterialTheme.colorScheme.onSurface 
+                            else 
+                                MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
         } else if (!isLoading) {
-            Text("Немає даних", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Дані не завантажено", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
         }
 
         Spacer(Modifier.height(12.dp))
@@ -502,5 +541,36 @@ fun MainScreen(
         ) {
             Text(if (isLoading) "Завантаження..." else "Оновити ⟳")
         }
+    }
+
+    // Діалог вибору валюти
+    if (showCurrencyPicker) {
+        AlertDialog(
+            onDismissRequest = { showCurrencyPicker = false },
+            title = { Text("Оберіть базову валюту") },
+            text = {
+                Column {
+                    CURRENCIES.forEach { curr ->
+                        TextButton(
+                            onClick = {
+                                baseCurrency = curr.code
+                                showCurrencyPicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "${curr.flag} ${curr.code} - ${curr.name}",
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCurrencyPicker = false }) {
+                    Text("Закрити")
+                }
+            }
+        )
     }
 }
