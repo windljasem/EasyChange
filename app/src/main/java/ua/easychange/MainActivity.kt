@@ -1,6 +1,7 @@
 package ua.easychange
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -9,7 +10,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -34,16 +37,22 @@ interface MonoApi {
 data class MonoDto(
     val currencyCodeA: Int,
     val currencyCodeB: Int,
-    val rateBuy: Double?,
-    val rateSell: Double?,
-    val rateCross: Double?
+    val rateBuy: Double? = null,
+    val rateSell: Double? = null,
+    val rateCross: Double? = null
 )
 
 interface NbuApi {
     @GET("NBUStatService/v1/statdirectory/exchange?json")
     suspend fun load(): List<NbuDto>
 }
-data class NbuDto(val cc: String, val rate: Double)
+data class NbuDto(
+    val r030: Int? = null,
+    val txt: String? = null,
+    val rate: Double? = null,
+    val cc: String? = null,
+    val exchangedate: String? = null
+)
 
 interface BinanceApi {
     @GET("api/v3/ticker/price")
@@ -62,10 +71,30 @@ fun MonoDto.code(i: Int) = when (i) {
 
 fun convert(a: Double, from: String, to: String, r: List<Fx>): Double {
     if (from == to) return a
-    r.firstOrNull { it.base == from && it.quote == to }?.let { return a * it.mid }
-    r.firstOrNull { it.base == to && it.quote == from }?.let { return a / it.mid }
-    val usd = convert(a, from, "USD", r)
-    return convert(usd, "USD", to, r)
+    
+    // Пряма конвертація
+    r.firstOrNull { it.base == from && it.quote == to }?.let { 
+        return a * it.mid 
+    }
+    
+    // Зворотна конвертація
+    r.firstOrNull { it.base == to && it.quote == from }?.let { 
+        return a / it.mid 
+    }
+    
+    // Через USD
+    val toUsd = r.firstOrNull { it.base == from && it.quote == "USD" }
+        ?: r.firstOrNull { it.quote == from && it.base == "USD" }
+    
+    val fromUsd = r.firstOrNull { it.base == "USD" && it.quote == to }
+        ?: r.firstOrNull { it.quote == "USD" && it.base == to }
+    
+    if (toUsd != null && fromUsd != null) {
+        val usdAmount = if (toUsd.base == from) a * toUsd.mid else a / toUsd.mid
+        return if (fromUsd.base == "USD") usdAmount * fromUsd.mid else usdAmount / fromUsd.mid
+    }
+    
+    return 0.0
 }
 
 // ------------------ ACTIVITY ------------------
@@ -130,43 +159,118 @@ fun MainScreen(
         scope.launch {
             isLoading = true
             errorMessage = null
-            try {
-                rates = when (source) {
-                    "KURS", "INTERBANK" -> {
-                        kurs.load().data.map {
-                            Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
-                        }
-                    }
-
-                    "MONO" -> {
-                        mono.load().mapNotNull {
-                            val b = it.code(it.currencyCodeA)
-                            val q = it.code(it.currencyCodeB)
-                            if (b != null && q == "UAH") {
-                                val mid = it.rateCross ?: ((it.rateBuy ?: 0.0) + (it.rateSell ?: 0.0)) / 2
-                                if (mid > 0) Fx(b, q, it.rateBuy, it.rateSell, mid) else null
-                            } else null
-                        }
-                    }
-
-                    "NBU" -> {
-                        nbu.load()
-                            .filter { it.cc in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CAD", "CZK", "BGN", "HRK") }
-                            .map {
-                                Fx(it.cc, "UAH", null, null, it.rate)
+            
+            withContext(Dispatchers.IO) {
+                try {
+                    Log.d("EasyChange", "Loading rates from: $source")
+                    
+                    rates = when (source) {
+                        "KURS", "INTERBANK" -> {
+                            try {
+                                val response = kurs.load()
+                                Log.d("EasyChange", "KURS loaded: ${response.data.size} rates")
+                                response.data.map {
+                                    Fx(it.base, it.quote, it.buy, it.sell, (it.buy + it.sell) / 2)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "KURS error: ${e.message}", e)
+                                throw e
                             }
+                        }
+
+                        "MONO" -> {
+                            try {
+                                val response = mono.load()
+                                Log.d("EasyChange", "MONO loaded: ${response.size} rates")
+                                
+                                response.mapNotNull {
+                                    val b = it.code(it.currencyCodeA)
+                                    val q = it.code(it.currencyCodeB)
+                                    
+                                    Log.d("EasyChange", "MONO item: $b -> $q, buy=${it.rateBuy}, sell=${it.rateSell}, cross=${it.rateCross}")
+                                    
+                                    if (b != null && q == "UAH") {
+                                        val buy = it.rateBuy
+                                        val sell = it.rateSell
+                                        val cross = it.rateCross
+                                        
+                                        val mid = when {
+                                            cross != null && cross > 0 -> cross
+                                            buy != null && sell != null && buy > 0 && sell > 0 -> (buy + sell) / 2
+                                            buy != null && buy > 0 -> buy
+                                            sell != null && sell > 0 -> sell
+                                            else -> null
+                                        }
+                                        
+                                        if (mid != null && mid > 0) {
+                                            Fx(b, q, buy, sell, mid)
+                                        } else {
+                                            Log.w("EasyChange", "MONO: invalid rate for $b->$q")
+                                            null
+                                        }
+                                    } else null
+                                }.also {
+                                    Log.d("EasyChange", "MONO processed: ${it.size} valid rates")
+                                }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "MONO error: ${e.message}", e)
+                                throw e
+                            }
+                        }
+
+                        "NBU" -> {
+                            try {
+                                val response = nbu.load()
+                                Log.d("EasyChange", "NBU loaded: ${response.size} rates")
+                                
+                                response
+                                    .filter { 
+                                        it.cc != null && 
+                                        it.rate != null && 
+                                        it.cc in listOf("USD", "EUR", "PLN", "GBP", "CHF", "CAD", "CZK", "BGN", "HRK") 
+                                    }
+                                    .map {
+                                        Log.d("EasyChange", "NBU: ${it.cc} = ${it.rate}")
+                                        Fx(it.cc!!, "UAH", null, null, it.rate!!)
+                                    }
+                                    .also {
+                                        Log.d("EasyChange", "NBU processed: ${it.size} rates")
+                                    }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "NBU error: ${e.message}", e)
+                                throw e
+                            }
+                        }
+
+                        else -> {
+                            Log.w("EasyChange", "Unknown source: $source")
+                            emptyList()
+                        }
                     }
 
-                    else -> emptyList()
+                    // Завантаження BTC
+                    try {
+                        val btcResponse = binance.btc()
+                        btc = btcResponse.price.toDoubleOrNull()
+                        Log.d("EasyChange", "BTC loaded: $btc")
+                    } catch (e: Exception) {
+                        Log.e("EasyChange", "BTC error: ${e.message}", e)
+                        btc = null
+                    }
+
+                } catch (e: Exception) {
+                    Log.e("EasyChange", "General error: ${e.message}", e)
+                    errorMessage = when {
+                        e.message?.contains("Unable to resolve host") == true -> 
+                            "Немає інтернету"
+                        e.message?.contains("timeout") == true -> 
+                            "Перевищено час очікування"
+                        else -> 
+                            "Помилка завантаження: ${e.message}"
+                    }
+                } finally {
+                    isLoading = false
                 }
-
-                btc = binance.btc().price.toDoubleOrNull()
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                errorMessage = "Помилка: ${e.message}"
-            } finally {
-                isLoading = false
             }
         }
     }
@@ -214,48 +318,60 @@ fun MainScreen(
         OutlinedTextField(
             value = amount,
             onValueChange = { newValue ->
-                // Дозволяємо тільки цифри і крапку
                 if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
                     amount = newValue
                 }
             },
             label = { Text("USD") },
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true
+            singleLine = true,
+            enabled = !isLoading
         )
 
         Spacer(Modifier.height(16.dp))
 
         // Показ помилки
         errorMessage?.let {
-            Text(
-                text = it,
-                color = MaterialTheme.colorScheme.error,
-                fontSize = 12.sp
-            )
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Text(
+                    text = it,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp),
+                    fontSize = 12.sp
+                )
+            }
             Spacer(Modifier.height(8.dp))
         }
 
         // Індикатор завантаження
         if (isLoading) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Завантаження...", fontSize = 12.sp)
+            }
             Spacer(Modifier.height(8.dp))
         }
 
         // Конвертовані валюти
         val amountDouble = amount.toDoubleOrNull() ?: 0.0
-        val hasUsd = rates.any { it.base == "USD" || it.quote == "USD" }
-        val hasUah = rates.any { it.quote == "UAH" || it.base == "UAH" }
 
         if (rates.isNotEmpty()) {
             listOf("EUR", "PLN", "UAH").forEach { code ->
                 val value = try {
-                    if (!hasUsd || !hasUah || amountDouble == 0.0) {
+                    if (amountDouble == 0.0) {
                         0.0
                     } else {
                         convert(amountDouble, "USD", code, rates)
                     }
                 } catch (e: Exception) {
+                    Log.e("EasyChange", "Conversion error for $code: ${e.message}")
                     0.0
                 }
 
@@ -281,6 +397,8 @@ fun MainScreen(
                     }
                 }
             }
+        } else if (!isLoading && errorMessage == null) {
+            Text("Немає даних", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
         Spacer(Modifier.height(16.dp))
@@ -311,7 +429,7 @@ fun MainScreen(
             modifier = Modifier.fillMaxWidth(),
             enabled = !isLoading
         ) {
-            Text("Оновити ⟳")
+            Text(if (isLoading) "Завантаження..." else "Оновити ⟳")
         }
     }
 }
