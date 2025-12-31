@@ -1,5 +1,6 @@
 package ua.easychange
 
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -10,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -239,8 +241,13 @@ fun MainScreen(
     exchangeRate: ExchangeRateApi,
     binance: BinanceApi
 ) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("EasyChangePrefs", Context.MODE_PRIVATE) }
+    
     var source by remember { mutableStateOf("MONO") }
-    var baseCurrency by remember { mutableStateOf("USD") }
+    var baseCurrency by remember { 
+        mutableStateOf(prefs.getString("last_currency", "USD") ?: "USD") 
+    }
     var amount by remember { mutableStateOf("1") }
     var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
     var btcPrice by remember { mutableStateOf<Double?>(null) }
@@ -251,6 +258,12 @@ fun MainScreen(
     var showCurrencyPicker by remember { mutableStateOf(false) }
     var lastRefreshTime by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
+    
+    // Зберігаємо вибрану валюту
+    fun saveCurrency(currency: String) {
+        prefs.edit().putString("last_currency", currency).apply()
+        baseCurrency = currency
+    }
 
     fun refresh() {
         // Захист від часих оновлень (мінімум 10 секунд між запитами)
@@ -697,7 +710,7 @@ fun MainScreen(
                     CURRENCIES.forEach { curr ->
                         TextButton(
                             onClick = {
-                                baseCurrency = curr.code
+                                saveCurrency(curr.code)
                                 showCurrencyPicker = false
                             },
                             modifier = Modifier.fillMaxWidth()
