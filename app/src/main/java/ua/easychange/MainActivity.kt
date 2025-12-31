@@ -335,8 +335,12 @@ fun MainScreen(
                                 val response = exchangeRate.load()
                                 Log.d("EasyChange", "ExchangeRate: ${response.rates.size} rates")
                                 
+                                // ExchangeRate API повертає курси ДО USD (1 USD = X валюти)
+                                // Тому конвертуємо: якщо USD -> інша валюта, множимо на rate
+                                // Якщо інша валюта -> USD, ділимо на rate
                                 response.rates.map { (code, rate) ->
-                                    Fx(code, "USD", null, null, rate)
+                                    // Зберігаємо як USD -> інша валюта
+                                    Fx("USD", code, null, null, rate)
                                 }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "ExchangeRate error: ${e.message}", e)
