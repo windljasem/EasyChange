@@ -40,6 +40,13 @@ data class CurrencyInfo(
     val name: String
 )
 
+data class CachedRates(
+    val rates: List<Fx>,
+    val btcPrice: Double?,
+    val ethPrice: Double?,
+    val timestamp: Long
+)
+
 // ------------------ API INTERFACES ------------------
 interface MonoApi {
     @GET("bank/currency")
@@ -83,6 +90,22 @@ data class NbpRate(
     val currency: String,
     val code: String,
     val mid: Double
+)
+
+interface KursApi {
+    @GET("api/currency/interbank")
+    suspend fun load(): KursInterbankResponse
+}
+
+data class KursInterbankResponse(
+    val data: List<KursRate>
+)
+
+data class KursRate(
+    val currency: String,
+    val code: String,
+    val buy: Double,
+    val sell: Double
 )
 
 interface ExchangeRateApi {
@@ -189,6 +212,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val kurs = Retrofit.Builder()
+            .baseUrl("https://kurs.com.ua/")
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(KursApi::class.java)
+
         val mono = Retrofit.Builder()
             .baseUrl("https://api.monobank.ua/")
             .addConverterFactory(GsonConverterFactory.create())
@@ -225,7 +254,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(mono, nbu, nbp, exchangeRate, binance)
+                    MainScreen(kurs, mono, nbu, nbp, exchangeRate, binance)
                 }
             }
         }
@@ -235,6 +264,7 @@ class MainActivity : ComponentActivity() {
 // ------------------ MAIN SCREEN ------------------
 @Composable
 fun MainScreen(
+    kurs: KursApi,
     mono: MonoApi,
     nbu: NbuApi,
     nbp: NbpApi,
@@ -256,8 +286,11 @@ fun MainScreen(
     var lastUpdate by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
-    var lastRefreshTime by remember { mutableStateOf(0L) }
+    var cacheInfo by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    
+    // Кеш для кожного джерела (60 секунд)
+    val cache = remember { mutableMapOf<String, CachedRates>() }
     
     // Зберігаємо вибрану валюту
     fun saveCurrency(currency: String) {
@@ -266,23 +299,48 @@ fun MainScreen(
     }
 
     fun refresh() {
-        // Захист від часих оновлень (мінімум 10 секунд між запитами)
         val currentTime = System.currentTimeMillis()
-        if (currentTime - lastRefreshTime < 10000) {
-            errorMessage = "Зачекайте 10 секунд перед наступним оновленням"
-            return
+        
+        // Перевіряємо кеш (60 секунд)
+        cache[source]?.let { cached ->
+            if (currentTime - cached.timestamp < 60000) {
+                // Дані свіжі - беремо з кешу
+                rates = cached.rates
+                btcPrice = cached.btcPrice
+                ethPrice = cached.ethPrice
+                val seconds = ((currentTime - cached.timestamp) / 1000).toInt()
+                cacheInfo = "Дані з кешу ($seconds сек. тому)"
+                Log.d("EasyChange", "Using cache for $source (${seconds}s old)")
+                return
+            }
         }
         
         scope.launch {
             isLoading = true
             errorMessage = null
-            lastRefreshTime = currentTime
+            cacheInfo = null
             
             withContext(Dispatchers.IO) {
                 try {
                     Log.d("EasyChange", "Loading from: $source")
                     
-                    rates = when (source) {
+                    val newRates = when (source) {
+                        "KURS" -> {
+                            try {
+                                val response = kurs.load()
+                                Log.d("EasyChange", "KURS: ${response.data.size} rates")
+                                
+                                response.data.map { rate ->
+                                    Fx(rate.code, "UAH", rate.buy, rate.sell, (rate.buy + rate.sell) / 2)
+                                }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "KURS error: ${e.message}", e)
+                                errorMessage = "KURS: ${e.message}"
+                                // Повертаємо старий кеш якщо є
+                                cache[source]?.rates ?: emptyList()
+                            }
+                        }
+
                         "MONO" -> {
                             try {
                                 val response = mono.load()
@@ -304,7 +362,8 @@ fun MainScreen(
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "MONO error: ${e.message}", e)
                                 errorMessage = "MONO: ${e.message}"
-                                emptyList()
+                                // Повертаємо старий кеш якщо є
+                                cache[source]?.rates ?: emptyList()
                             }
                         }
 
@@ -319,7 +378,7 @@ fun MainScreen(
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBU error: ${e.message}", e)
                                 errorMessage = "NBU: ${e.message}"
-                                emptyList()
+                                cache[source]?.rates ?: emptyList()
                             }
                         }
 
@@ -334,64 +393,69 @@ fun MainScreen(
                                     }
                                 } else {
                                     errorMessage = "NBP: порожня відповідь"
-                                    emptyList()
+                                    cache[source]?.rates ?: emptyList()
                                 }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBP error: ${e.message}", e)
                                 errorMessage = "NBP: ${e.message}"
-                                emptyList()
+                                cache[source]?.rates ?: emptyList()
                             }
                         }
 
-                        "EXRATE" -> {
-                            try {
-                                val response = exchangeRate.load()
-                                Log.d("EasyChange", "ExchangeRate: ${response.rates.size} rates")
-                                
-                                // ExchangeRate API повертає курси ДО USD (1 USD = X валюти)
-                                // Тому конвертуємо: якщо USD -> інша валюта, множимо на rate
-                                // Якщо інша валюта -> USD, ділимо на rate
-                                response.rates.map { (code, rate) ->
-                                    // Зберігаємо як USD -> інша валюта
-                                    Fx("USD", code, null, null, rate)
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "ExchangeRate error: ${e.message}", e)
-                                errorMessage = "ExchangeRate: ${e.message}"
-                                emptyList()
-                            }
-                        }
-
-                        else -> emptyList()
+                        else -> cache[source]?.rates ?: emptyList()
                     }
 
                     // Додаємо BTC та ETH
+                    var newBtc: Double? = null
+                    var newEth: Double? = null
+                    
                     try {
                         val btcResponse = binance.getPrice("BTCUSDT")
-                        btcPrice = btcResponse.price.toDoubleOrNull()
-                        Log.d("EasyChange", "BTC: $btcPrice USD")
+                        newBtc = btcResponse.price.toDoubleOrNull()
+                        Log.d("EasyChange", "BTC: $newBtc USD")
                     } catch (e: Exception) {
                         Log.e("EasyChange", "BTC error: ${e.message}")
-                        btcPrice = null
+                        newBtc = cache[source]?.btcPrice
                     }
                     
                     try {
                         val ethResponse = binance.getPrice("ETHUSDT")
-                        ethPrice = ethResponse.price.toDoubleOrNull()
-                        Log.d("EasyChange", "ETH: $ethPrice USD")
+                        newEth = ethResponse.price.toDoubleOrNull()
+                        Log.d("EasyChange", "ETH: $newEth USD")
                     } catch (e: Exception) {
                         Log.e("EasyChange", "ETH error: ${e.message}")
-                        ethPrice = null
+                        newEth = cache[source]?.ethPrice
                     }
 
-                    if (rates.isNotEmpty()) {
+                    // Зберігаємо в кеш
+                    if (newRates.isNotEmpty()) {
+                        cache[source] = CachedRates(newRates, newBtc, newEth, currentTime)
+                        rates = newRates
+                        btcPrice = newBtc
+                        ethPrice = newEth
+                        
                         val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
                         lastUpdate = "Курс оновлено ${format.format(Date())}"
+                    } else if (cache[source] != null) {
+                        // Якщо не вдалось завантажити, але є кеш - використовуємо його
+                        val cached = cache[source]!!
+                        rates = cached.rates
+                        btcPrice = cached.btcPrice
+                        ethPrice = cached.ethPrice
+                        errorMessage = (errorMessage ?: "") + " (показано з кешу)"
                     }
 
                 } catch (e: Exception) {
                     Log.e("EasyChange", "Error: ${e.message}", e)
                     errorMessage = "Помилка: ${e.message}"
+                    
+                    // Завжди намагаємось показати хоч щось з кешу
+                    cache[source]?.let {
+                        rates = it.rates
+                        btcPrice = it.btcPrice
+                        ethPrice = it.ethPrice
+                        errorMessage = (errorMessage ?: "") + " (показано з кешу)"
+                    }
                 } finally {
                     isLoading = false
                 }
@@ -411,6 +475,23 @@ fun MainScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Button(
+                        onClick = { source = "KURS" },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (source == "KURS") 
+                                MaterialTheme.colorScheme.primary 
+                            else 
+                                MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                            Text("KURS", fontSize = 13.sp)
+                            Text("kurs.com.ua", fontSize = 8.sp)
+                        }
+                    }
+                    
+                    Button(
                         onClick = { source = "MONO" },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
@@ -426,7 +507,12 @@ fun MainScreen(
                             Text("monobank.ua", fontSize = 8.sp)
                         }
                     }
-                    
+                }
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Button(
                         onClick = { source = "NBU" },
                         modifier = Modifier.weight(1f),
@@ -443,12 +529,7 @@ fun MainScreen(
                             Text("bank.gov.ua", fontSize = 8.sp)
                         }
                     }
-                }
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
+                    
                     Button(
                         onClick = { source = "NBP" },
                         modifier = Modifier.weight(1f),
@@ -465,23 +546,6 @@ fun MainScreen(
                             Text("nbp.pl", fontSize = 8.sp)
                         }
                     }
-                    
-                    Button(
-                        onClick = { source = "EXRATE" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "EXRATE") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("ExRate", fontSize = 12.sp)
-                            Text("exchangerate-api", fontSize = 7.sp)
-                        }
-                    }
                 }
             }
 
@@ -490,6 +554,17 @@ fun MainScreen(
             // Час оновлення
             lastUpdate?.let {
                 Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(4.dp))
+            }
+            
+            // Інфо про кеш
+            cacheInfo?.let {
+                Text(
+                    it, 
+                    fontSize = 10.sp, 
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                )
                 Spacer(Modifier.height(8.dp))
             }
 
