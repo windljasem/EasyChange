@@ -44,7 +44,8 @@ data class CachedRates(
     val rates: List<Fx>,
     val btcPrice: Double?,
     val ethPrice: Double?,
-    val timestamp: Long
+    val timestamp: Long,
+    val previousRates: List<Fx>? = null  // для порівняння
 )
 
 // ------------------ API INTERFACES ------------------
@@ -93,7 +94,7 @@ data class NbpRate(
 )
 
 interface KursApi {
-    @GET("api/currency/interbank")
+    @GET("api/currency/commercial")
     suspend fun load(): KursInterbankResponse
 }
 
@@ -429,7 +430,9 @@ fun MainScreen(
 
                     // Зберігаємо в кеш
                     if (newRates.isNotEmpty()) {
-                        cache[source] = CachedRates(newRates, newBtc, newEth, currentTime)
+                        // Зберігаємо попередні курси для порівняння
+                        val previousRates = cache[source]?.rates
+                        cache[source] = CachedRates(newRates, newBtc, newEth, currentTime, previousRates)
                         rates = newRates
                         btcPrice = newBtc
                         ethPrice = newEth
@@ -477,7 +480,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "KURS" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "KURS") 
                                 MaterialTheme.colorScheme.primary 
@@ -486,8 +489,9 @@ fun MainScreen(
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KURS", fontSize = 13.sp)
-                            Text("kurs.com.ua", fontSize = 8.sp)
+                            Text("KURS", fontSize = 12.sp)
+                            Text("commercial", fontSize = 7.sp)
+                            Text("kurs.com.ua", fontSize = 7.sp)
                         }
                     }
                     
@@ -682,6 +686,27 @@ fun MainScreen(
             if (rates.isNotEmpty()) {
                 CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
                     val value = convert(amountDouble, baseCurrency, curr.code, rates)
+                    
+                    // Отримуємо попередню ціну для порівняння
+                    val previousRates = cache[source]?.previousRates
+                    val previousValue = if (previousRates != null && amountDouble > 0) {
+                        convert(amountDouble, baseCurrency, curr.code, previousRates)
+                    } else null
+                    
+                    // Обчислюємо зміну
+                    val trend = if (value != null && previousValue != null) {
+                        when {
+                            value > previousValue -> "↑"
+                            value < previousValue -> "↓"
+                            else -> "→"
+                        }
+                    } else null
+                    
+                    val trendColor = when (trend) {
+                        "↑" -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // зелений
+                        "↓" -> androidx.compose.ui.graphics.Color(0xFFF44336) // червоний
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant // сірий
+                    }
 
                     Card(
                         modifier = Modifier
@@ -698,19 +723,31 @@ fun MainScreen(
                                 "${curr.flag} ${curr.code}",
                                 style = MaterialTheme.typography.titleMedium
                             )
-                            Text(
-                                if (value != null) {
-                                    String.format(Locale.US, "%.2f", value)
-                                } else {
-                                    "НЕ ВИЗНАЧЕНО"
-                                },
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (value != null) 
-                                    MaterialTheme.colorScheme.onSurface 
-                                else 
-                                    MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = if (value != null) 16.sp else 12.sp
-                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    if (value != null) {
+                                        String.format(Locale.US, "%.2f", value)
+                                    } else {
+                                        "НЕ ВИЗНАЧЕНО"
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (value != null) 
+                                        MaterialTheme.colorScheme.onSurface 
+                                    else 
+                                        MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = if (value != null) 16.sp else 12.sp
+                                )
+                                if (trend != null) {
+                                    Text(
+                                        trend,
+                                        fontSize = 14.sp,
+                                        color = trendColor
+                                    )
+                                }
+                            }
                         }
                     }
                 }
