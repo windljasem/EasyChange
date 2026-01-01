@@ -94,7 +94,7 @@ data class NbpRate(
 )
 
 interface KursApi {
-    @GET("api/currency/commercial")
+    @GET("api/currency/interbank")
     suspend fun load(): KursInterbankResponse
 }
 
@@ -480,7 +480,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "KURS" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "KURS") 
                                 MaterialTheme.colorScheme.primary 
@@ -489,9 +489,8 @@ fun MainScreen(
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KURS", fontSize = 12.sp)
-                            Text("commercial", fontSize = 7.sp)
-                            Text("kurs.com.ua", fontSize = 7.sp)
+                            Text("KURS", fontSize = 13.sp)
+                            Text("kurs.com.ua", fontSize = 8.sp)
                         }
                     }
                     
@@ -577,6 +576,11 @@ fun MainScreen(
                 val usdToEur = convert(1.0, "USD", "EUR", rates)
                 val eurToUsd = convert(1.0, "EUR", "USD", rates)
                 
+                // Отримуємо попередні значення для тенденцій
+                val prevRates = cache[source]?.previousRates
+                val prevUsdToEur = if (prevRates != null) convert(1.0, "USD", "EUR", prevRates) else null
+                val prevEurToUsd = if (prevRates != null) convert(1.0, "EUR", "USD", prevRates) else null
+                
                 if (usdToEur != null || eurToUsd != null) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -584,25 +588,82 @@ fun MainScreen(
                             containerColor = MaterialTheme.colorScheme.secondaryContainer
                         )
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(10.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly
+                                .padding(10.dp)
                         ) {
                             if (usdToEur != null) {
-                                Text(
-                                    "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
-                                    fontSize = 12.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                )
+                                val diff = if (prevUsdToEur != null) usdToEur - prevUsdToEur else 0.0
+                                val trend = when {
+                                    diff > 0.0001 -> "🔺"
+                                    diff < -0.0001 -> "🔻"
+                                    else -> "🔷"
+                                }
+                                val color = when {
+                                    diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
+                                    diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
+                                    else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
+                                }
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
+                                        fontSize = 12.sp,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                    )
+                                    if (prevUsdToEur != null && kotlin.math.abs(diff) > 0.0001) {
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            "$trend${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
+                                            fontSize = 10.sp,
+                                            color = color
+                                        )
+                                    } else if (prevUsdToEur != null) {
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(trend, fontSize = 10.sp, color = color)
+                                    }
+                                }
                             }
                             if (eurToUsd != null) {
-                                Text(
-                                    "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
-                                    fontSize = 12.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                )
+                                val diff = if (prevEurToUsd != null) eurToUsd - prevEurToUsd else 0.0
+                                val trend = when {
+                                    diff > 0.0001 -> "🔺"
+                                    diff < -0.0001 -> "🔻"
+                                    else -> "🔷"
+                                }
+                                val color = when {
+                                    diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
+                                    diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
+                                    else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
+                                }
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
+                                        fontSize = 12.sp,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                    )
+                                    if (prevEurToUsd != null && kotlin.math.abs(diff) > 0.0001) {
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            "$trend${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
+                                            fontSize = 10.sp,
+                                            color = color
+                                        )
+                                    } else if (prevEurToUsd != null) {
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(trend, fontSize = 10.sp, color = color)
+                                    }
+                                }
                             }
                         }
                     }
@@ -694,18 +755,20 @@ fun MainScreen(
                     } else null
                     
                     // Обчислюємо зміну
-                    val trend = if (value != null && previousValue != null) {
+                    val diff = if (value != null && previousValue != null) value - previousValue else null
+                    val trend = if (diff != null) {
                         when {
-                            value > previousValue -> "↑"
-                            value < previousValue -> "↓"
-                            else -> "→"
+                            diff > 0.01 -> "🔺"
+                            diff < -0.01 -> "🔻"
+                            else -> "🔷"
                         }
                     } else null
                     
                     val trendColor = when (trend) {
-                        "↑" -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // зелений
-                        "↓" -> androidx.compose.ui.graphics.Color(0xFFF44336) // червоний
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant // сірий
+                        "🔺" -> androidx.compose.ui.graphics.Color(0xFFE53935) // червоний (дорожче)
+                        "🔻" -> androidx.compose.ui.graphics.Color(0xFF43A047) // зелений (дешевше)
+                        "🔷" -> androidx.compose.ui.graphics.Color(0xFF1E88E5) // синій (без змін)
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
 
                     Card(
@@ -717,14 +780,15 @@ fun MainScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                         ) {
                             Text(
                                 "${curr.flag} ${curr.code}",
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                             ) {
                                 Text(
@@ -743,7 +807,7 @@ fun MainScreen(
                                 if (trend != null) {
                                     Text(
                                         trend,
-                                        fontSize = 14.sp,
+                                        fontSize = 16.sp,
                                         color = trendColor
                                     )
                                 }
