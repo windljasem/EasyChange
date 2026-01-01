@@ -49,20 +49,6 @@ data class CachedRates(
 )
 
 // ------------------ API INTERFACES ------------------
-interface MonoApi {
-    @GET("bank/currency")
-    suspend fun load(): List<MonoDto>
-}
-
-data class MonoDto(
-    val currencyCodeA: Int,
-    val currencyCodeB: Int,
-    val date: Long,
-    val rateBuy: Double? = null,
-    val rateSell: Double? = null,
-    val rateCross: Double? = null
-)
-
 interface NbuApi {
     @GET("NBUStatService/v1/statdirectory/exchange?json")
     suspend fun load(): List<NbuDto>
@@ -108,32 +94,6 @@ data class KursTodayRate(
     val sell: Double
 )
 
-interface KursApi {
-    @GET("api/currency/interbank")
-    suspend fun load(): KursInterbankResponse
-}
-
-data class KursInterbankResponse(
-    val data: List<KursRate>
-)
-
-data class KursRate(
-    val currency: String,
-    val code: String,
-    val buy: Double,
-    val sell: Double
-)
-
-interface ExchangeRateApi {
-    @GET("v6/latest/USD")
-    suspend fun load(): ExchangeRateResponse
-}
-
-data class ExchangeRateResponse(
-    val base_code: String,
-    val rates: Map<String, Double>
-)
-
 interface BinanceApi {
     @GET("api/v3/ticker/price")
     suspend fun getPrice(@Query("symbol") s: String): BinanceDto
@@ -155,19 +115,6 @@ val CURRENCIES = listOf(
 )
 
 // ------------------ UTILITY FUNCTIONS ------------------
-fun MonoDto.code(i: Int) = when (i) {
-    840 -> "USD"
-    978 -> "EUR"
-    985 -> "PLN"
-    980 -> "UAH"
-    826 -> "GBP"
-    756 -> "CHF"
-    203 -> "CZK"
-    124 -> "CAD"
-    156 -> "CNY"
-    else -> null
-}
-
 fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? {
     if (from == to) return amount
     if (amount == 0.0) return 0.0
@@ -228,18 +175,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val kurs = Retrofit.Builder()
-            .baseUrl("https://kurs.com.ua/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(KursApi::class.java)
-
-        val mono = Retrofit.Builder()
-            .baseUrl("https://api.monobank.ua/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(MonoApi::class.java)
-
         val nbu = Retrofit.Builder()
             .baseUrl("https://bank.gov.ua/")
             .addConverterFactory(GsonConverterFactory.create())
@@ -258,12 +193,6 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(KursTodayApi::class.java)
 
-        val exchangeRate = Retrofit.Builder()
-            .baseUrl("https://open.exchangerate-api.com/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(ExchangeRateApi::class.java)
-
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
             .addConverterFactory(GsonConverterFactory.create())
@@ -276,7 +205,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(kurs, mono, nbu, nbp, kursToday, binance)
+                    MainScreen(nbu, nbp, kursToday, binance)
                 }
             }
         }
@@ -286,8 +215,6 @@ class MainActivity : ComponentActivity() {
 // ------------------ MAIN SCREEN ------------------
 @Composable
 fun MainScreen(
-    kurs: KursApi,
-    mono: MonoApi,
     nbu: NbuApi,
     nbp: NbpApi,
     kursToday: KursTodayApi,
@@ -296,7 +223,7 @@ fun MainScreen(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("EasyChangePrefs", Context.MODE_PRIVATE) }
     
-    var source by remember { mutableStateOf("MONO") }
+    var source by remember { mutableStateOf("NBU") }
     var baseCurrency by remember { 
         mutableStateOf(prefs.getString("last_currency", "USD") ?: "USD") 
     }
@@ -306,9 +233,7 @@ fun MainScreen(
     var ethPrice by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
-    var cacheInfo by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     
     // Кеш для кожного джерела (60 секунд)
@@ -331,7 +256,6 @@ fun MainScreen(
                 btcPrice = cached.btcPrice
                 ethPrice = cached.ethPrice
                 val seconds = ((currentTime - cached.timestamp) / 1000).toInt()
-                cacheInfo = "Дані з кешу ($seconds сек. тому)"
                 Log.d("EasyChange", "Using cache for $source (${seconds}s old)")
                 return
             }
@@ -339,61 +263,12 @@ fun MainScreen(
         
         scope.launch {
             isLoading = true
-            errorMessage = null
-            cacheInfo = null
             
             withContext(Dispatchers.IO) {
                 try {
                     Log.d("EasyChange", "Loading from: $source")
                     
                     val newRates = when (source) {
-                        "KURS" -> {
-                            try {
-                                val response = kurs.load()
-                                Log.d("EasyChange", "KURS: ${response.data.size} rates")
-                                
-                                response.data.map { rate ->
-                                    Fx(rate.code, "UAH", rate.buy, rate.sell, (rate.buy + rate.sell) / 2)
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "KURS error: ${e.message}", e)
-                                errorMessage = "KURS: ${e.message}"
-                                // Повертаємо старий кеш якщо є
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
-                        "MONO" -> {
-                            try {
-                                val response = mono.load()
-                                Log.d("EasyChange", "MONO: ${response.size} items")
-                                
-                                response.mapNotNull { dto ->
-                                    val base = dto.code(dto.currencyCodeA)
-                                    val quote = dto.code(dto.currencyCodeB)
-                                    
-                                    if (base != null && quote != null) {
-                                        // Якщо є rateBuy і rateSell - це купівля/продаж
-                                        if (dto.rateBuy != null && dto.rateSell != null) {
-                                            val mid = (dto.rateBuy + dto.rateSell) / 2.0
-                                            Fx(base, quote, dto.rateBuy, dto.rateSell, mid)
-                                        }
-                                        // Якщо є rateCross - це крос-курс
-                                        else if (dto.rateCross != null) {
-                                            Fx(base, quote, null, null, dto.rateCross)
-                                        } else {
-                                            null
-                                        }
-                                    } else null
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "MONO error: ${e.message}", e)
-                                errorMessage = "MONO: ${e.message}"
-                                // Повертаємо старий кеш якщо є
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
                         "NBU" -> {
                             try {
                                 val response = nbu.load()
@@ -404,7 +279,6 @@ fun MainScreen(
                                     .map { Fx(it.cc!!, "UAH", null, null, it.rate!!) }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBU error: ${e.message}", e)
-                                errorMessage = "NBU: ${e.message}"
                                 cache[source]?.rates ?: emptyList()
                             }
                         }
@@ -419,12 +293,10 @@ fun MainScreen(
                                         Fx(rate.code, "PLN", null, null, rate.mid)
                                     }
                                 } else {
-                                    errorMessage = "NBP: порожня відповідь"
                                     cache[source]?.rates ?: emptyList()
                                 }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBP error: ${e.message}", e)
-                                errorMessage = "NBP: ${e.message}"
                                 cache[source]?.rates ?: emptyList()
                             }
                         }
@@ -448,14 +320,12 @@ fun MainScreen(
                                 }
                                 
                                 if (ratesList.isEmpty()) {
-                                    errorMessage = "KANTOR: не вдалось завантажити курси"
                                     cache[source]?.rates ?: emptyList()
                                 } else {
                                     ratesList
                                 }
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "KANTOR error: ${e.message}", e)
-                                errorMessage = "KANTOR: ${e.message}"
                                 cache[source]?.rates ?: emptyList()
                             }
                         }
@@ -502,19 +372,23 @@ fun MainScreen(
                         rates = cached.rates
                         btcPrice = cached.btcPrice
                         ethPrice = cached.ethPrice
-                        errorMessage = (errorMessage ?: "") + " (показано з кешу)"
+                        
+                        // Показуємо час останнього успішного оновлення
+                        val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
+                        lastUpdate = "Останнє оновлення: ${format.format(Date(cached.timestamp))}"
                     }
 
                 } catch (e: Exception) {
                     Log.e("EasyChange", "Error: ${e.message}", e)
-                    errorMessage = "Помилка: ${e.message}"
                     
                     // Завжди намагаємось показати хоч щось з кешу
                     cache[source]?.let {
                         rates = it.rates
                         btcPrice = it.btcPrice
                         ethPrice = it.ethPrice
-                        errorMessage = (errorMessage ?: "") + " (показано з кешу)"
+                        
+                        val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
+                        lastUpdate = "Останнє оновлення: ${format.format(Date(it.timestamp))}"
                     }
                 } finally {
                     isLoading = false
@@ -528,47 +402,9 @@ fun MainScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         // Верхня частина - не скролиться
         Column(modifier = Modifier.padding(16.dp)) {
-            // Кнопки джерел - зменшена висота
+            // Кнопки джерел
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Button(
-                        onClick = { source = "KURS" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "KURS") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KURS", fontSize = 13.sp)
-                            Text("kurs.com.ua", fontSize = 8.sp)
-                        }
-                    }
-                    
-                    Button(
-                        onClick = { source = "MONO" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "MONO") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("MONO", fontSize = 13.sp)
-                            Text("monobank.ua", fontSize = 8.sp)
-                        }
-                    }
-                }
-                
+                // Верхній ряд - NBU і NBP
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -591,20 +427,38 @@ fun MainScreen(
                     }
                     
                     Button(
-                        onClick = { source = "KANTOR" },
+                        onClick = { source = "NBP" },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "KANTOR") 
+                            containerColor = if (source == "NBP") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KANTOR", fontSize = 13.sp)
-                            Text("kurstoday.ua", fontSize = 8.sp)
+                            Text("NBP", fontSize = 13.sp)
+                            Text("nbp.pl", fontSize = 8.sp)
                         }
+                    }
+                }
+                
+                // Нижній ряд - KANTOR (широка кнопка)
+                Button(
+                    onClick = { source = "KANTOR" },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (source == "KANTOR") 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.secondary
+                    )
+                ) {
+                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                        Text("KANTOR", fontSize = 13.sp)
+                        Text("kurstoday.com.ua", fontSize = 8.sp)
                     }
                 }
             }
@@ -614,138 +468,45 @@ fun MainScreen(
             // Час оновлення
             lastUpdate?.let {
                 Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
-            }
-            
-            // Інфо про кеш
-            cacheInfo?.let {
-                Text(
-                    it, 
-                    fontSize = 10.sp, 
-                    color = MaterialTheme.colorScheme.secondary,
-                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                )
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Кроскурс USD/EUR і тенденції
+            // Кроскурс USD/EUR
             if (rates.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Кроскурс
-                    val usdToEur = convert(1.0, "USD", "EUR", rates)
-                    val eurToUsd = convert(1.0, "EUR", "USD", rates)
-                    
-                    if (usdToEur != null || eurToUsd != null) {
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
-                            )
+                val usdToEur = convert(1.0, "USD", "EUR", rates)
+                val eurToUsd = convert(1.0, "EUR", "USD", rates)
+                
+                if (usdToEur != null || eurToUsd != null) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(8.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(8.dp)
-                            ) {
+                            Text(
+                                "Кроскурс",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            
+                            if (usdToEur != null) {
                                 Text(
-                                    "Кроскурс",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                    "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
+                                    fontSize = 11.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                
-                                if (usdToEur != null) {
-                                    Text(
-                                        "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
-                                        fontSize = 11.sp,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                    )
-                                }
-                                if (eurToUsd != null) {
-                                    Text(
-                                        "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
-                                        fontSize = 11.sp,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                    )
-                                }
                             }
-                        }
-                    }
-                    
-                    // Тенденції
-                    val prevRates = cache[source]?.previousRates
-                    if (prevRates != null) {
-                        val usdToEurPrev = convert(1.0, "USD", "EUR", prevRates)
-                        val eurToUsdPrev = convert(1.0, "EUR", "USD", prevRates)
-                        
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(8.dp)
-                            ) {
+                            if (eurToUsd != null) {
                                 Text(
-                                    "Тенденції",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                    "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
+                                    fontSize = 11.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                
-                                if (usdToEur != null && usdToEurPrev != null) {
-                                    val diff = usdToEur - usdToEurPrev
-                                    val trend = when {
-                                        diff > 0.0001 -> "🔺"
-                                        diff < -0.0001 -> "🔻"
-                                        else -> "🔷"
-                                    }
-                                    val color = when {
-                                        diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                                        diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                                        else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
-                                    }
-                                    
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        Text("USD/EUR", fontSize = 10.sp)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            "$trend ${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
-                                            fontSize = 10.sp,
-                                            color = color,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                        )
-                                    }
-                                }
-                                
-                                if (eurToUsd != null && eurToUsdPrev != null) {
-                                    val diff = eurToUsd - eurToUsdPrev
-                                    val trend = when {
-                                        diff > 0.0001 -> "🔺"
-                                        diff < -0.0001 -> "🔻"
-                                        else -> "🔷"
-                                    }
-                                    val color = when {
-                                        diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                                        diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                                        else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
-                                    }
-                                    
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        Text("EUR/USD", fontSize = 10.sp)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            "$trend ${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
-                                            fontSize = 10.sp,
-                                            color = color,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                        )
-                                    }
-                                }
                             }
                         }
                     }
@@ -788,23 +549,6 @@ fun MainScreen(
             }
 
             Spacer(Modifier.height(12.dp))
-
-            // Помилка
-            errorMessage?.let {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Text(
-                        it,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(12.dp),
-                        fontSize = 12.sp
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
 
             // Завантаження
             if (isLoading) {
