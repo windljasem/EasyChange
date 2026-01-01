@@ -40,12 +40,13 @@ data class CurrencyInfo(
     val name: String
 )
 
-data class CachedRates(
+// Окремий кеш для кожного джерела
+data class SourceCachedRates(
     val rates: List<Fx>,
     val btcPrice: Double?,
     val ethPrice: Double?,
     val timestamp: Long,
-    val previousRates: List<Fx>? = null  // для порівняння
+    val previousRates: List<Fx>? = null
 )
 
 // ------------------ API INTERFACES ------------------
@@ -57,6 +58,7 @@ interface MonoApi {
 data class MonoDto(
     val currencyCodeA: Int,
     val currencyCodeB: Int,
+    val date: Long,
     val rateBuy: Double? = null,
     val rateSell: Double? = null,
     val rateCross: Double? = null
@@ -252,13 +254,13 @@ class MainActivity : ComponentActivity() {
             .create(NbpApi::class.java)
 
         val kursToday = Retrofit.Builder()
-            .baseUrl("https://api.kurstoday.com/")
+            .baseUrl("https://kurs.com.ua/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(KursTodayApi::class.java)
 
         val exchangeRate = Retrofit.Builder()
-            .baseUrl("https://open.exchangerate-api.com/")
+            .baseUrl("https://v6.exchangerate-api.com/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(ExchangeRateApi::class.java)
@@ -275,475 +277,323 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(kurs, mono, nbu, nbp, kursToday, binance)
+                    Main(mono, nbu, nbp, kurs, kursToday, exchangeRate, binance)
                 }
             }
         }
     }
 }
 
-// ------------------ MAIN SCREEN ------------------
 @Composable
-fun MainScreen(
-    kurs: KursApi,
+fun Main(
     mono: MonoApi,
     nbu: NbuApi,
     nbp: NbpApi,
+    kurs: KursApi,
     kursToday: KursTodayApi,
+    exchangeRate: ExchangeRateApi,
     binance: BinanceApi
 ) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("EasyChangePrefs", Context.MODE_PRIVATE) }
+    val ctx = LocalContext.current
+    val prefs = ctx.getSharedPreferences("easychange", Context.MODE_PRIVATE)
     
-    var source by remember { mutableStateOf("MONO") }
-    var baseCurrency by remember { 
-        mutableStateOf(prefs.getString("last_currency", "USD") ?: "USD") 
+    var source by remember { mutableStateOf(prefs.getString("source", "MONO") ?: "MONO") }
+    var baseCurrency by remember { mutableStateOf(prefs.getString("base", "USD") ?: "USD") }
+    
+    // Окремий кеш для кожного джерела
+    var sourceCache by remember { 
+        mutableStateOf<Map<String, SourceCachedRates>>(emptyMap()) 
     }
-    var amount by remember { mutableStateOf("1") }
-    var rates by remember { mutableStateOf<List<Fx>>(emptyList()) }
+    
+    var rates by remember { mutableStateOf(emptyList<Fx>()) }
     var btcPrice by remember { mutableStateOf<Double?>(null) }
     var ethPrice by remember { mutableStateOf<Double?>(null) }
+    var amount by remember { mutableStateOf("100") }
     var isLoading by remember { mutableStateOf(false) }
-    var lastUpdate by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var lastUpdated by remember { mutableStateOf<String?>(null) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
-    var cacheInfo by remember { mutableStateOf<String?>(null) }
+
     val scope = rememberCoroutineScope()
+
+    fun saveSource(s: String) {
+        source = s
+        prefs.edit().putString("source", s).apply()
+    }
+
+    fun saveCurrency(c: String) {
+        baseCurrency = c
+        prefs.edit().putString("base", c).apply()
+    }
     
-    // Кеш для кожного джерела (60 секунд)
-    val cache = remember { mutableMapOf<String, CachedRates>() }
-    
-    // Зберігаємо вибрану валюту
-    fun saveCurrency(currency: String) {
-        prefs.edit().putString("last_currency", currency).apply()
-        baseCurrency = currency
+    // Завантаження даних з окремим кешем для кожного джерела
+    suspend fun loadData(forceRefresh: Boolean = false): SourceCachedRates? {
+        val now = System.currentTimeMillis()
+        val cached = sourceCache[source]
+        
+        // Перевіряємо кеш для поточного джерела
+        if (!forceRefresh && cached != null && (now - cached.timestamp) < 5 * 60 * 1000) {
+            Log.d("EasyChange", "Використовую кеш для $source")
+            return cached
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val newRates = when (source) {
+                    "MONO" -> {
+                        Log.d("EasyChange", "Завантаження MONO")
+                        val data = mono.load()
+                        Log.d("EasyChange", "MONO відповідь: ${data.size} записів")
+                        
+                        data.mapNotNull { dto ->
+                            val a = dto.code(dto.currencyCodeA) ?: return@mapNotNull null
+                            val b = dto.code(dto.currencyCodeB) ?: return@mapNotNull null
+                            
+                            when {
+                                dto.rateBuy != null && dto.rateSell != null -> {
+                                    val mid = (dto.rateBuy + dto.rateSell) / 2.0
+                                    Fx(a, b, dto.rateBuy, dto.rateSell, mid)
+                                }
+                                dto.rateCross != null -> {
+                                    Fx(a, b, null, null, dto.rateCross)
+                                }
+                                else -> null
+                            }
+                        }
+                    }
+
+                    "NBU" -> {
+                        Log.d("EasyChange", "Завантаження NBU")
+                        val data = nbu.load()
+                        Log.d("EasyChange", "NBU відповідь: ${data.size} записів")
+                        
+                        data.mapNotNull { dto ->
+                            val code = dto.cc ?: return@mapNotNull null
+                            val rate = dto.rate ?: return@mapNotNull null
+                            
+                            if (CURRENCIES.any { it.code == code }) {
+                                Fx(code, "UAH", null, null, rate)
+                            } else null
+                        }
+                    }
+
+                    "NBP" -> {
+                        Log.d("EasyChange", "Завантаження NBP")
+                        val data = nbp.load()
+                        Log.d("EasyChange", "NBP відповідь: ${data.size} таблиць")
+                        
+                        data.firstOrNull()?.rates?.mapNotNull { dto ->
+                            if (CURRENCIES.any { it.code == dto.code }) {
+                                Fx(dto.code, "PLN", null, null, dto.mid)
+                            } else null
+                        } ?: emptyList()
+                    }
+
+                    "KURS" -> {
+                        Log.d("EasyChange", "Завантаження KURS")
+                        val data = kurs.load()
+                        Log.d("EasyChange", "KURS відповідь: ${data.data.size} записів")
+                        
+                        data.data.mapNotNull { dto ->
+                            if (CURRENCIES.any { it.code == dto.code }) {
+                                val mid = (dto.buy + dto.sell) / 2.0
+                                Fx(dto.code, "UAH", dto.buy, dto.sell, mid)
+                            } else null
+                        }
+                    }
+
+                    "KURS_TODAY" -> {
+                        Log.d("EasyChange", "Завантаження KURS_TODAY")
+                        val rates = mutableListOf<Fx>()
+                        
+                        listOf("usd", "eur", "pln", "gbp", "chf", "czk", "cad", "cny").forEach { curr ->
+                            try {
+                                val data = kursToday.load(curr)
+                                val code = curr.uppercase()
+                                val mid = (data.buy + data.sell) / 2.0
+                                rates.add(Fx(code, "UAH", data.buy, data.sell, mid))
+                            } catch (e: Exception) {
+                                Log.w("EasyChange", "Помилка для $curr: ${e.message}")
+                            }
+                        }
+                        rates
+                    }
+
+                    "EXCHANGE_RATE" -> {
+                        Log.d("EasyChange", "Завантаження EXCHANGE_RATE")
+                        val data = exchangeRate.load()
+                        Log.d("EasyChange", "EXCHANGE_RATE відповідь: ${data.rates.size} курсів")
+                        
+                        data.rates.mapNotNull { (code, rate) ->
+                            if (CURRENCIES.any { it.code == code }) {
+                                Fx("USD", code, null, null, rate)
+                            } else null
+                        }
+                    }
+
+                    else -> {
+                        Log.w("EasyChange", "Невідоме джерело: $source")
+                        emptyList()
+                    }
+                }
+
+                val newBtcPrice = try {
+                    binance.getPrice("BTCUSDT").price.toDoubleOrNull()
+                } catch (e: Exception) {
+                    Log.w("EasyChange", "Помилка BTC: ${e.message}")
+                    null
+                }
+
+                val newEthPrice = try {
+                    binance.getPrice("ETHUSDT").price.toDoubleOrNull()
+                } catch (e: Exception) {
+                    Log.w("EasyChange", "Помилка ETH: ${e.message}")
+                    null
+                }
+
+                SourceCachedRates(
+                    rates = newRates,
+                    btcPrice = newBtcPrice,
+                    ethPrice = newEthPrice,
+                    timestamp = now,
+                    previousRates = cached?.rates
+                )
+            } catch (e: Exception) {
+                Log.e("EasyChange", "Помилка завантаження: ${e.message}", e)
+                null
+            }
+        }
     }
 
     fun refresh() {
-        val currentTime = System.currentTimeMillis()
-        
-        // Перевіряємо кеш (60 секунд)
-        cache[source]?.let { cached ->
-            if (currentTime - cached.timestamp < 60000) {
-                // Дані свіжі - беремо з кешу
-                rates = cached.rates
-                btcPrice = cached.btcPrice
-                ethPrice = cached.ethPrice
-                val seconds = ((currentTime - cached.timestamp) / 1000).toInt()
-                cacheInfo = "Дані з кешу ($seconds сек. тому)"
-                Log.d("EasyChange", "Using cache for $source (${seconds}s old)")
-                return
-            }
-        }
-        
         scope.launch {
             isLoading = true
             errorMessage = null
-            cacheInfo = null
             
-            withContext(Dispatchers.IO) {
-                try {
-                    Log.d("EasyChange", "Loading from: $source")
-                    
-                    val newRates = when (source) {
-                        "KURS" -> {
-                            try {
-                                val response = kurs.load()
-                                Log.d("EasyChange", "KURS: ${response.data.size} rates")
-                                
-                                response.data.map { rate ->
-                                    Fx(rate.code, "UAH", rate.buy, rate.sell, (rate.buy + rate.sell) / 2)
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "KURS error: ${e.message}", e)
-                                errorMessage = "KURS: ${e.message}"
-                                // Повертаємо старий кеш якщо є
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
-                        "MONO" -> {
-                            try {
-                                val response = mono.load()
-                                Log.d("EasyChange", "MONO: ${response.size} items")
-                                
-                                response.mapNotNull {
-                                    val base = it.code(it.currencyCodeA)
-                                    val quote = it.code(it.currencyCodeB)
-                                    
-                                    if (base != null && quote == "UAH") {
-                                        val mid = it.rateCross 
-                                            ?: ((it.rateBuy ?: 0.0) + (it.rateSell ?: 0.0)) / 2
-                                        
-                                        if (mid > 0) {
-                                            Fx(base, quote, it.rateBuy, it.rateSell, mid)
-                                        } else null
-                                    } else null
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "MONO error: ${e.message}", e)
-                                errorMessage = "MONO: ${e.message}"
-                                // Повертаємо старий кеш якщо є
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
-                        "NBU" -> {
-                            try {
-                                val response = nbu.load()
-                                Log.d("EasyChange", "NBU: ${response.size} items")
-                                
-                                response
-                                    .filter { it.cc != null && it.rate != null && it.rate > 0 }
-                                    .map { Fx(it.cc!!, "UAH", null, null, it.rate!!) }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "NBU error: ${e.message}", e)
-                                errorMessage = "NBU: ${e.message}"
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
-                        "NBP" -> {
-                            try {
-                                val response = nbp.load()
-                                Log.d("EasyChange", "NBP: ${response.size} tables")
-                                
-                                if (response.isNotEmpty()) {
-                                    response[0].rates.map { rate ->
-                                        Fx(rate.code, "PLN", null, null, rate.mid)
-                                    }
-                                } else {
-                                    errorMessage = "NBP: порожня відповідь"
-                                    cache[source]?.rates ?: emptyList()
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "NBP error: ${e.message}", e)
-                                errorMessage = "NBP: ${e.message}"
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
-                        "KANTOR" -> {
-                            try {
-                                val currencies = listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK", "CAD", "CNY")
-                                val ratesList = mutableListOf<Fx>()
-                                
-                                currencies.forEach { curr ->
-                                    try {
-                                        val response = kursToday.load(curr, "exchange")
-                                        ratesList.add(
-                                            Fx(curr, "UAH", response.buy, response.sell, 
-                                               (response.buy + response.sell) / 2)
-                                        )
-                                        Log.d("EasyChange", "KursToday: $curr = ${response.buy}/${response.sell}")
-                                    } catch (e: Exception) {
-                                        Log.e("EasyChange", "KursToday $curr error: ${e.message}")
-                                    }
-                                }
-                                
-                                if (ratesList.isEmpty()) {
-                                    errorMessage = "KANTOR: не вдалось завантажити курси"
-                                    cache[source]?.rates ?: emptyList()
-                                } else {
-                                    ratesList
-                                }
-                            } catch (e: Exception) {
-                                Log.e("EasyChange", "KANTOR error: ${e.message}", e)
-                                errorMessage = "KANTOR: ${e.message}"
-                                cache[source]?.rates ?: emptyList()
-                            }
-                        }
-
-                        else -> cache[source]?.rates ?: emptyList()
-                    }
-
-                    // Додаємо BTC та ETH
-                    var newBtc: Double? = null
-                    var newEth: Double? = null
-                    
-                    try {
-                        val btcResponse = binance.getPrice("BTCUSDT")
-                        newBtc = btcResponse.price.toDoubleOrNull()
-                        Log.d("EasyChange", "BTC: $newBtc USD")
-                    } catch (e: Exception) {
-                        Log.e("EasyChange", "BTC error: ${e.message}")
-                        newBtc = cache[source]?.btcPrice
-                    }
-                    
-                    try {
-                        val ethResponse = binance.getPrice("ETHUSDT")
-                        newEth = ethResponse.price.toDoubleOrNull()
-                        Log.d("EasyChange", "ETH: $newEth USD")
-                    } catch (e: Exception) {
-                        Log.e("EasyChange", "ETH error: ${e.message}")
-                        newEth = cache[source]?.ethPrice
-                    }
-
-                    // Зберігаємо в кеш
-                    if (newRates.isNotEmpty()) {
-                        // Зберігаємо попередні курси для порівняння
-                        val previousRates = cache[source]?.rates
-                        cache[source] = CachedRates(newRates, newBtc, newEth, currentTime, previousRates)
-                        rates = newRates
-                        btcPrice = newBtc
-                        ethPrice = newEth
-                        
-                        val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
-                        lastUpdate = "Курс оновлено ${format.format(Date())}"
-                    } else if (cache[source] != null) {
-                        // Якщо не вдалось завантажити, але є кеш - використовуємо його
-                        val cached = cache[source]!!
-                        rates = cached.rates
-                        btcPrice = cached.btcPrice
-                        ethPrice = cached.ethPrice
-                        errorMessage = (errorMessage ?: "") + " (показано з кешу)"
-                    }
-
-                } catch (e: Exception) {
-                    Log.e("EasyChange", "Error: ${e.message}", e)
-                    errorMessage = "Помилка: ${e.message}"
-                    
-                    // Завжди намагаємось показати хоч щось з кешу
-                    cache[source]?.let {
-                        rates = it.rates
-                        btcPrice = it.btcPrice
-                        ethPrice = it.ethPrice
-                        errorMessage = (errorMessage ?: "") + " (показано з кешу)"
-                    }
-                } finally {
-                    isLoading = false
+            val result = loadData(forceRefresh = true)
+            
+            if (result != null) {
+                // Оновлюємо кеш для поточного джерела
+                sourceCache = sourceCache + (source to result)
+                
+                rates = result.rates
+                btcPrice = result.btcPrice
+                ethPrice = result.ethPrice
+                
+                val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                lastUpdated = sdf.format(Date())
+                
+                Log.d("EasyChange", "Завантажено ${rates.size} курсів для $source")
+            } else {
+                errorMessage = "Не вдалося завантажити дані"
+                
+                // Якщо є кеш, використовуємо його
+                val cached = sourceCache[source]
+                if (cached != null) {
+                    rates = cached.rates
+                    btcPrice = cached.btcPrice
+                    ethPrice = cached.ethPrice
+                    errorMessage = "Використано кешовані дані"
                 }
             }
+            
+            isLoading = false
         }
     }
 
-    LaunchedEffect(source) { refresh() }
+    // Завантаження при зміні джерела
+    LaunchedEffect(source) {
+        isLoading = true
+        errorMessage = null
+        
+        val result = loadData(forceRefresh = false)
+        
+        if (result != null) {
+            // Оновлюємо кеш для поточного джерела
+            sourceCache = sourceCache + (source to result)
+            
+            rates = result.rates
+            btcPrice = result.btcPrice
+            ethPrice = result.ethPrice
+            
+            val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+            lastUpdated = sdf.format(Date())
+        } else {
+            errorMessage = "Не вдалося завантажити дані"
+        }
+        
+        isLoading = false
+    }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Верхня частина - не скролиться
-        Column(modifier = Modifier.padding(16.dp)) {
-            // Кнопки джерел - зменшена висота
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Button(
-                        onClick = { source = "KURS" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "KURS") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KURS", fontSize = 13.sp)
-                            Text("kurs.com.ua", fontSize = 8.sp)
-                        }
-                    }
-                    
-                    Button(
-                        onClick = { source = "MONO" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "MONO") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("MONO", fontSize = 13.sp)
-                            Text("monobank.ua", fontSize = 8.sp)
-                        }
-                    }
-                }
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Button(
-                        onClick = { source = "NBU" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "NBU") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("NBU", fontSize = 13.sp)
-                            Text("bank.gov.ua", fontSize = 8.sp)
-                        }
-                    }
-                    
-                    Button(
-                        onClick = { source = "KANTOR" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "KANTOR") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KANTOR", fontSize = 13.sp)
-                            Text("kurstoday.ua", fontSize = 8.sp)
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 16.dp)
+    ) {
+        // Верхня панель з елементами керування
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            // Заголовок з назвою джерела
+            Text(
+                text = when (source) {
+                    "MONO" -> "Монобанк"
+                    "NBU" -> "НБУ"
+                    "NBP" -> "NBP (Польща)"
+                    "KURS" -> "Міжбанк"
+                    "KURS_TODAY" -> "Обмінники"
+                    "EXCHANGE_RATE" -> "Exchange Rate"
+                    else -> source
+                },
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
 
             // Час оновлення
-            lastUpdate?.let {
-                Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(4.dp))
-            }
-            
-            // Інфо про кеш
-            cacheInfo?.let {
+            lastUpdated?.let {
                 Text(
-                    it, 
-                    fontSize = 10.sp, 
-                    color = MaterialTheme.colorScheme.secondary,
-                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                    "Оновлено: $it",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
-                Spacer(Modifier.height(8.dp))
             }
 
-            // Кроскурс USD/EUR і тенденції
-            if (rates.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Кроскурс
-                    val usdToEur = convert(1.0, "USD", "EUR", rates)
-                    val eurToUsd = convert(1.0, "EUR", "USD", rates)
-                    
-                    if (usdToEur != null || eurToUsd != null) {
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(8.dp)
-                            ) {
-                                Text(
-                                    "Кроскурс",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                
-                                if (usdToEur != null) {
-                                    Text(
-                                        "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
-                                        fontSize = 11.sp,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                    )
-                                }
-                                if (eurToUsd != null) {
-                                    Text(
-                                        "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
-                                        fontSize = 11.sp,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Тенденції
-                    val prevRates = cache[source]?.previousRates
-                    if (prevRates != null) {
-                        val usdToEurPrev = convert(1.0, "USD", "EUR", prevRates)
-                        val eurToUsdPrev = convert(1.0, "EUR", "USD", prevRates)
-                        
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(8.dp)
-                            ) {
-                                Text(
-                                    "Тенденції",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                
-                                if (usdToEur != null && usdToEurPrev != null) {
-                                    val diff = usdToEur - usdToEurPrev
-                                    val trend = when {
-                                        diff > 0.0001 -> "🔺"
-                                        diff < -0.0001 -> "🔻"
-                                        else -> "🔷"
-                                    }
-                                    val color = when {
-                                        diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                                        diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                                        else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
-                                    }
-                                    
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        Text("USD/EUR", fontSize = 10.sp)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            "$trend ${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
-                                            fontSize = 10.sp,
-                                            color = color,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                        )
-                                    }
-                                }
-                                
-                                if (eurToUsd != null && eurToUsdPrev != null) {
-                                    val diff = eurToUsd - eurToUsdPrev
-                                    val trend = when {
-                                        diff > 0.0001 -> "🔺"
-                                        diff < -0.0001 -> "🔻"
-                                        else -> "🔷"
-                                    }
-                                    val color = when {
-                                        diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                                        diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                                        else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
-                                    }
-                                    
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        Text("EUR/USD", fontSize = 10.sp)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            "$trend ${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
-                                            fontSize = 10.sp,
-                                            color = color,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+            // Вибір джерела
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf(
+                    "MONO" to "MONO",
+                    "NBU" to "НБУ",
+                    "NBP" to "NBP",
+                    "KURS" to "МБ",
+                    "KURS_TODAY" to "ОБМ",
+                    "EXCHANGE_RATE" to "ER"
+                ).forEach { (key, label) ->
+                    FilterChip(
+                        selected = source == key,
+                        onClick = { saveSource(key) },
+                        label = { Text(label, fontSize = 12.sp) },
+                        modifier = Modifier.weight(1f),
+                        enabled = !isLoading
+                    )
                 }
+            }
+
+            // Інформація про кеш
+            if (sourceCache.isNotEmpty()) {
+                Text(
+                    "Кеш: ${sourceCache.keys.joinToString(", ")}",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -824,8 +674,8 @@ fun MainScreen(
                 CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
                     val value = convert(amountDouble, baseCurrency, curr.code, rates)
                     
-                    // Отримуємо попередню ціну для порівняння
-                    val previousRates = cache[source]?.previousRates
+                    // Отримуємо попередню ціну для порівняння з кешу поточного джерела
+                    val previousRates = sourceCache[source]?.previousRates
                     val previousValue = if (previousRates != null && amountDouble > 0) {
                         convert(amountDouble, baseCurrency, curr.code, previousRates)
                     } else null
