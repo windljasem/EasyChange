@@ -587,7 +587,7 @@ fun MainScreen(
                     Button(
                         onClick = { source = "KANTOR" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (source == "KANTOR") 
                                 MaterialTheme.colorScheme.primary 
@@ -596,9 +596,8 @@ fun MainScreen(
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KURS", fontSize = 12.sp)
-                            Text("kantor", fontSize = 7.sp)
-                            Text("kurstoday.ua", fontSize = 7.sp)
+                            Text("KANTOR", fontSize = 13.sp)
+                            Text("kurstoday.ua", fontSize = 8.sp)
                         }
                     }
                 }
@@ -623,104 +622,129 @@ fun MainScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Кроскурс USD/EUR над полем введення
+            // Кроскурс USD/EUR і тенденції
             if (rates.isNotEmpty()) {
-                val usdToEur = convert(1.0, "USD", "EUR", rates)
-                val eurToUsd = convert(1.0, "EUR", "USD", rates)
-                
-                // Отримуємо попередні значення для тенденцій
-                val prevRates = cache[source]?.previousRates
-                val prevUsdToEur = if (prevRates != null) convert(1.0, "USD", "EUR", prevRates) else null
-                val prevEurToUsd = if (prevRates != null) convert(1.0, "EUR", "USD", prevRates) else null
-                
-                if (usdToEur != null || eurToUsd != null) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(10.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Кроскурс
+                    val usdToEur = convert(1.0, "USD", "EUR", rates)
+                    val eurToUsd = convert(1.0, "EUR", "USD", rates)
+                    
+                    if (usdToEur != null || eurToUsd != null) {
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
                         ) {
-                            if (usdToEur != null) {
-                                val diff = if (prevUsdToEur != null) usdToEur - prevUsdToEur else 0.0
-                                val trend = when {
-                                    diff > 0.0001 -> "🔺"
-                                    diff < -0.0001 -> "🔻"
-                                    else -> "🔷"
-                                }
-                                val color = when {
-                                    diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                                    diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                                    else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
-                                }
+                            Column(
+                                modifier = Modifier.padding(8.dp)
+                            ) {
+                                Text(
+                                    "Кроскурс",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                )
+                                Spacer(Modifier.height(4.dp))
                                 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
+                                if (usdToEur != null) {
                                     Text(
                                         "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                     )
-                                    if (prevUsdToEur != null && kotlin.math.abs(diff) > 0.0001) {
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            "$trend${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
-                                            fontSize = 10.sp,
-                                            color = color
-                                        )
-                                    } else if (prevUsdToEur != null) {
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(trend, fontSize = 10.sp, color = color)
-                                    }
                                 }
-                            }
-                            if (eurToUsd != null) {
-                                val diff = if (prevEurToUsd != null) eurToUsd - prevEurToUsd else 0.0
-                                val trend = when {
-                                    diff > 0.0001 -> "🔺"
-                                    diff < -0.0001 -> "🔻"
-                                    else -> "🔷"
-                                }
-                                val color = when {
-                                    diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                                    diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                                    else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
-                                }
-                                
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
+                                if (eurToUsd != null) {
                                     Text(
                                         "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                     )
-                                    if (prevEurToUsd != null && kotlin.math.abs(diff) > 0.0001) {
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Тенденції
+                    val prevRates = cache[source]?.previousRates
+                    if (prevRates != null) {
+                        val usdToEurPrev = convert(1.0, "USD", "EUR", prevRates)
+                        val eurToUsdPrev = convert(1.0, "EUR", "USD", prevRates)
+                        
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp)
+                            ) {
+                                Text(
+                                    "Тенденції",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                
+                                if (usdToEur != null && usdToEurPrev != null) {
+                                    val diff = usdToEur - usdToEurPrev
+                                    val trend = when {
+                                        diff > 0.0001 -> "🔺"
+                                        diff < -0.0001 -> "🔻"
+                                        else -> "🔷"
+                                    }
+                                    val color = when {
+                                        diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
+                                        diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
+                                        else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
+                                    }
+                                    
+                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                        Text("USD/EUR", fontSize = 10.sp)
                                         Spacer(Modifier.width(4.dp))
                                         Text(
-                                            "$trend${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
+                                            "$trend ${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
                                             fontSize = 10.sp,
-                                            color = color
+                                            color = color,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                         )
-                                    } else if (prevEurToUsd != null) {
+                                    }
+                                }
+                                
+                                if (eurToUsd != null && eurToUsdPrev != null) {
+                                    val diff = eurToUsd - eurToUsdPrev
+                                    val trend = when {
+                                        diff > 0.0001 -> "🔺"
+                                        diff < -0.0001 -> "🔻"
+                                        else -> "🔷"
+                                    }
+                                    val color = when {
+                                        diff > 0.0001 -> androidx.compose.ui.graphics.Color(0xFFE53935)
+                                        diff < -0.0001 -> androidx.compose.ui.graphics.Color(0xFF43A047)
+                                        else -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
+                                    }
+                                    
+                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                        Text("EUR/USD", fontSize = 10.sp)
                                         Spacer(Modifier.width(4.dp))
-                                        Text(trend, fontSize = 10.sp, color = color)
+                                        Text(
+                                            "$trend ${if (diff > 0) "+" else ""}${String.format(Locale.US, "%.4f", diff)}",
+                                            fontSize = 10.sp,
+                                            color = color,
+                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                        )
                                     }
                                 }
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
                 }
+                Spacer(Modifier.height(8.dp))
             }
 
             // Поле введення з прапором зліва і кнопкою оновлення справа
