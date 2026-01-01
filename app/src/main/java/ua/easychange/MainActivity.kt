@@ -93,6 +93,20 @@ data class NbpRate(
     val mid: Double
 )
 
+interface KursTodayApi {
+    @GET("v1/currency/rates")
+    suspend fun load(
+        @Query("currency") currency: String,
+        @Query("type") type: String = "exchange"
+    ): KursTodayRate
+}
+
+data class KursTodayRate(
+    val currency: String,
+    val buy: Double,
+    val sell: Double
+)
+
 interface KursApi {
     @GET("api/currency/interbank")
     suspend fun load(): KursInterbankResponse
@@ -237,6 +251,12 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbpApi::class.java)
 
+        val kursToday = Retrofit.Builder()
+            .baseUrl("https://api.kurstoday.com/")
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(KursTodayApi::class.java)
+
         val exchangeRate = Retrofit.Builder()
             .baseUrl("https://open.exchangerate-api.com/")
             .addConverterFactory(GsonConverterFactory.create())
@@ -255,7 +275,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(kurs, mono, nbu, nbp, exchangeRate, binance)
+                    MainScreen(kurs, mono, nbu, nbp, kursToday, binance)
                 }
             }
         }
@@ -269,7 +289,7 @@ fun MainScreen(
     mono: MonoApi,
     nbu: NbuApi,
     nbp: NbpApi,
-    exchangeRate: ExchangeRateApi,
+    kursToday: KursTodayApi,
     binance: BinanceApi
 ) {
     val context = LocalContext.current
@@ -399,6 +419,37 @@ fun MainScreen(
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "NBP error: ${e.message}", e)
                                 errorMessage = "NBP: ${e.message}"
+                                cache[source]?.rates ?: emptyList()
+                            }
+                        }
+
+                        "KANTOR" -> {
+                            try {
+                                val currencies = listOf("USD", "EUR", "PLN", "GBP", "CHF", "CZK", "CAD", "CNY")
+                                val ratesList = mutableListOf<Fx>()
+                                
+                                currencies.forEach { curr ->
+                                    try {
+                                        val response = kursToday.load(curr, "exchange")
+                                        ratesList.add(
+                                            Fx(curr, "UAH", response.buy, response.sell, 
+                                               (response.buy + response.sell) / 2)
+                                        )
+                                        Log.d("EasyChange", "KursToday: $curr = ${response.buy}/${response.sell}")
+                                    } catch (e: Exception) {
+                                        Log.e("EasyChange", "KursToday $curr error: ${e.message}")
+                                    }
+                                }
+                                
+                                if (ratesList.isEmpty()) {
+                                    errorMessage = "KANTOR: не вдалось завантажити курси"
+                                    cache[source]?.rates ?: emptyList()
+                                } else {
+                                    ratesList
+                                }
+                            } catch (e: Exception) {
+                                Log.e("EasyChange", "KANTOR error: ${e.message}", e)
+                                errorMessage = "KANTOR: ${e.message}"
                                 cache[source]?.rates ?: emptyList()
                             }
                         }
@@ -534,19 +585,20 @@ fun MainScreen(
                     }
                     
                     Button(
-                        onClick = { source = "NBP" },
+                        onClick = { source = "KANTOR" },
                         modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "NBP") 
+                            containerColor = if (source == "KANTOR") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("NBP", fontSize = 13.sp)
-                            Text("nbp.pl", fontSize = 8.sp)
+                            Text("KURS", fontSize = 12.sp)
+                            Text("kantor", fontSize = 7.sp)
+                            Text("kurstoday.ua", fontSize = 7.sp)
                         }
                     }
                 }
