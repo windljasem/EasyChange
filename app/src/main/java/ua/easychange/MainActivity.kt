@@ -471,7 +471,7 @@ fun MainScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Кроскурс USD/EUR
+            // Кроскурс USD/EUR (ОДИН РЯДОК)
             if (rates.isNotEmpty()) {
                 val usdToEur = convert(1.0, "USD", "EUR", rates)
                 val eurToUsd = convert(1.0, "EUR", "USD", rates)
@@ -483,8 +483,11 @@ fun MainScreen(
                             containerColor = MaterialTheme.colorScheme.secondaryContainer
                         )
                     ) {
-                        Column(
-                            modifier = Modifier.padding(8.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
                                 "Кроскурс",
@@ -492,21 +495,21 @@ fun MainScreen(
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                             )
-                            Spacer(Modifier.height(4.dp))
-                            
-                            if (usdToEur != null) {
-                                Text(
-                                    "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
-                                    fontSize = 11.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                )
-                            }
-                            if (eurToUsd != null) {
-                                Text(
-                                    "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
-                                    fontSize = 11.sp,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                )
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                if (usdToEur != null) {
+                                    Text(
+                                        "1 USD = ${String.format(Locale.US, "%.4f", usdToEur)} EUR",
+                                        fontSize = 10.sp,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                    )
+                                }
+                                if (eurToUsd != null) {
+                                    Text(
+                                        "1 EUR = ${String.format(Locale.US, "%.4f", eurToUsd)} USD",
+                                        fontSize = 10.sp,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
