@@ -49,7 +49,7 @@ data class CachedRates(
     val ethPrice: Double?,
     val timestamp: Long,
     val previousRates: List<Fx>? = null,
-    val exchangers: List<KantorExchanger>? = null
+    val exchangers: List<KantorExchanger>? = null  // Для KANTOR
 )
 
 // KANTOR моделі
@@ -188,19 +188,19 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                 .url("https://kurstoday.com.ua/$city")
                 .build()
             
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e("KANTOR", "HTTP error: ${response.code}")
+            val httpResponse = client.newCall(request).execute()
+            if (!httpResponse.isSuccessful) {
+                Log.e("KANTOR", "HTTP error: ${httpResponse.code}")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            val html = response.body?.string() ?: return@withContext Pair(emptyList(), emptyList())
+            val html = httpResponse.body?.string() ?: return@withContext Pair(emptyList(), emptyList())
             
             // Парсимо середні курси (верхня таблиця)
             val avgRates = mutableListOf<Fx>()
             
-            // Regex для верхньої таблиці: <td>USD</td>...<td>42.13</td><td>42.48</td>
-            val tablePattern = """<td[^>]*>\s*<img[^>]*>\s*([A-Z]{3})</td>.*?<td[^>]*>([0-9.]+)</td>\s*<td[^>]*>([0-9.]+)</td>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            // Regex для таблиці: <td>USD</td>...<td>42.13</td><td>42.48</td>
+            val tablePattern = """<td[^>]*>\s*(?:<img[^>]*>)?\s*([A-Z]{3})</td>.*?<td[^>]*>([0-9.]+)</td>\s*<td[^>]*>([0-9.]+)</td>""".toRegex(RegexOption.DOT_MATCHES_ALL)
             
             tablePattern.findAll(html).forEach { match ->
                 try {
@@ -208,10 +208,10 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                     val buy = match.groupValues[2].toDoubleOrNull()
                     val sell = match.groupValues[3].toDoubleOrNull()
                     
-                    if (buy != null && sell != null) {
+                    if (buy != null && sell != null && CURRENCIES.any { it.code == code }) {
                         val mid = (buy + sell) / 2.0
                         avgRates.add(Fx(code, "UAH", buy, sell, mid))
-                        Log.d("KANTOR", "Parsed avg rate: $code = $buy/$sell")
+                        Log.d("KANTOR", "Parsed avg: $code = $buy/$sell")
                     }
                 } catch (e: Exception) {
                     Log.w("KANTOR", "Error parsing avg rate: ${e.message}")
@@ -221,52 +221,56 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             // Парсимо обмінники
             val exchangers = mutableListOf<KantorExchanger>()
             
-            // Знаходимо всі блоки обмінників: <div id="#48">...</div>
-            val exchangerBlockPattern = """<div[^>]*id\s*=\s*["']#(\d+)["'][^>]*>(.*?)</div>\s*</div>\s*</div>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            // Знаходимо ID обмінників в dropdown
+            val idPattern = """<option[^>]+value\s*=\s*["'](\d+)["'][^>]*>(.*?)</option>""".toRegex()
+            val exchangerIds = mutableMapOf<String, String>()
             
-            exchangerBlockPattern.findAll(html).forEach { blockMatch ->
+            idPattern.findAll(html).forEach { match ->
+                val id = match.groupValues[1]
+                val name = match.groupValues[2]
+                    .replace("""<[^>]*>""".toRegex(), "")
+                    .replace("""#\d+\s*-\s*""".toRegex(), "")
+                    .trim()
+                if (name.isNotEmpty() && id.isNotEmpty()) {
+                    exchangerIds[id] = name
+                    Log.d("KANTOR", "Found exchanger: #$id - $name")
+                }
+            }
+            
+            // Парсимо таблиці обмінників
+            exchangerIds.forEach { (id, name) ->
                 try {
-                    val id = blockMatch.groupValues[1]
-                    val block = blockMatch.groupValues[2]
+                    // Шукаємо блок обмінника
+                    val blockPattern = """<div[^>]*id\s*=\s*["']#$id["'][^>]*>(.*?)</table>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+                    val blockMatch = blockPattern.find(html)
                     
-                    // Назва обмінника
-                    val namePattern = """<h3[^>]*>(.*?)</h3>""".toRegex()
-                    val nameMatch = namePattern.find(block)
-                    var name = nameMatch?.groupValues?.get(1)?.trim() ?: ""
-                    
-                    // Видаляємо HTML теги з назви
-                    name = name.replace("""<[^>]*>""".toRegex(), "").trim()
-                    
-                    if (name.isEmpty()) {
-                        // Спробуємо альтернативний патерн
-                        val altNamePattern = """class\s*=\s*["']exchanger-name["'][^>]*>(.*?)<""".toRegex()
-                        name = altNamePattern.find(block)?.groupValues?.get(1)?.replace("""<[^>]*>""".toRegex(), "")?.trim() ?: "Обмінник #$id"
-                    }
-                    
-                    // Парсимо курси обмінника
-                    val ratesMap = mutableMapOf<String, KantorRate>()
-                    
-                    // Шукаємо рядки таблиці з курсами: <td>USD</td><td>41.80</td><td>42.40</td>
-                    val rateRowPattern = """<td[^>]*>\s*<img[^>]*>\s*([A-Z]{3})</td>\s*<td[^>]*>([0-9.—\s]+)</td>\s*<td[^>]*>([0-9.—\s]+)</td>""".toRegex()
-                    
-                    rateRowPattern.findAll(block).forEach { rateMatch ->
-                        val currCode = rateMatch.groupValues[1]
-                        val buyText = rateMatch.groupValues[2].trim()
-                        val sellText = rateMatch.groupValues[3].trim()
+                    if (blockMatch != null) {
+                        val block = blockMatch.groupValues[1]
+                        val ratesMap = mutableMapOf<String, KantorRate>()
                         
-                        val buy = if (buyText == "—" || buyText.isEmpty()) null else buyText.toDoubleOrNull()
-                        val sell = if (sellText == "—" || sellText.isEmpty()) null else sellText.toDoubleOrNull()
+                        // Парсимо рядки таблиці
+                        val ratePattern = """<tr[^>]*>.*?<td[^>]*>(?:<img[^>]*>)?\s*([A-Z]{3})</td>\s*<td[^>]*>([0-9.—\s]+)</td>\s*<td[^>]*>([0-9.—\s]+)</td>""".toRegex(RegexOption.DOT_MATCHES_ALL)
                         
-                        ratesMap[currCode] = KantorRate(buy, sell)
+                        ratePattern.findAll(block).forEach { rateMatch ->
+                            val currCode = rateMatch.groupValues[1]
+                            val buyText = rateMatch.groupValues[2].trim()
+                            val sellText = rateMatch.groupValues[3].trim()
+                            
+                            val buy = if (buyText == "—" || buyText.isEmpty()) null else buyText.toDoubleOrNull()
+                            val sell = if (sellText == "—" || sellText.isEmpty()) null else sellText.toDoubleOrNull()
+                            
+                            if (CURRENCIES.any { it.code == currCode }) {
+                                ratesMap[currCode] = KantorRate(buy, sell)
+                            }
+                        }
+                        
+                        if (ratesMap.isNotEmpty()) {
+                            exchangers.add(KantorExchanger(id, name, ratesMap))
+                            Log.d("KANTOR", "Exchanger #$id ($name): ${ratesMap.size} rates")
+                        }
                     }
-                    
-                    if (ratesMap.isNotEmpty()) {
-                        exchangers.add(KantorExchanger(id, name, ratesMap))
-                        Log.d("KANTOR", "Parsed exchanger: #$id - $name with ${ratesMap.size} rates")
-                    }
-                    
                 } catch (e: Exception) {
-                    Log.w("KANTOR", "Error parsing exchanger block: ${e.message}")
+                    Log.w("KANTOR", "Error parsing exchanger #$id: ${e.message}")
                 }
             }
             
@@ -274,11 +278,12 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             Pair(avgRates, exchangers)
             
         } catch (e: Exception) {
-            Log.e("KANTOR", "Error loading KANTOR data: ${e.message}", e)
+            Log.e("KANTOR", "Error loading KANTOR: ${e.message}", e)
             Pair(emptyList(), emptyList())
         }
     }
 }
+
 
 // ------------------ MAIN ACTIVITY ------------------
 class MainActivity : ComponentActivity() {
@@ -343,9 +348,10 @@ fun MainScreen(
     var showCityPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     
-    // Кеш для кожного джерела
+    // Кеш для кожного джерела (60 секунд)
     val cache = remember { mutableMapOf<String, CachedRates>() }
     
+    // Зберігаємо вибрану валюту
     fun saveCurrency(currency: String) {
         prefs.edit().putString("last_currency", currency).apply()
         baseCurrency = currency
@@ -358,6 +364,7 @@ fun MainScreen(
         // Перевіряємо кеш (60 секунд)
         cache[cacheKey]?.let { cached ->
             if (currentTime - cached.timestamp < 60000) {
+                // Дані свіжі - беремо з кешу
                 rates = cached.rates
                 btcPrice = cached.btcPrice
                 ethPrice = cached.ethPrice
@@ -434,7 +441,7 @@ fun MainScreen(
                         }
                     }
 
-                    // BTC та ETH
+                    // Додаємо BTC та ETH
                     var newBtc: Double? = null
                     var newEth: Double? = null
                     
@@ -444,7 +451,7 @@ fun MainScreen(
                         Log.d("EasyChange", "BTC: $newBtc USD")
                     } catch (e: Exception) {
                         Log.e("EasyChange", "BTC error: ${e.message}")
-                        newBtc = cache[cacheKey]?.btcPrice
+                        newBtc = cache[source]?.btcPrice
                     }
                     
                     try {
@@ -453,7 +460,7 @@ fun MainScreen(
                         Log.d("EasyChange", "ETH: $newEth USD")
                     } catch (e: Exception) {
                         Log.e("EasyChange", "ETH error: ${e.message}")
-                        newEth = cache[cacheKey]?.ethPrice
+                        newEth = cache[source]?.ethPrice
                     }
 
                     // Зберігаємо в кеш
@@ -490,6 +497,10 @@ fun MainScreen(
                         val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
                         lastUpdate = "Останнє оновлення: ${format.format(Date(it.timestamp))}"
                     }
+                        
+                        val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
+                        lastUpdate = "Останнє оновлення: ${format.format(Date(it.timestamp))}"
+                    }
                 } finally {
                     isLoading = false
                 }
@@ -500,10 +511,11 @@ fun MainScreen(
     LaunchedEffect(source, kantorCity) { refresh() }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Верхня частина
+        // Верхня частина - не скролиться
         Column(modifier = Modifier.padding(16.dp)) {
             // Кнопки джерел
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Верхній ряд - NBU і NBP
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -543,53 +555,34 @@ fun MainScreen(
                     }
                 }
                 
-                Row(
+                // Нижній ряд - KANTOR (широка кнопка)
+                Button(
+                    onClick = { source = "KANTOR" },
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (source == "KANTOR") 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.secondary
+                    )
                 ) {
-                    Button(
-                        onClick = { source = "KANTOR" },
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "KANTOR") 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("KANTOR", fontSize = 13.sp)
-                            Text("kurstoday.com.ua", fontSize = 8.sp)
-                        }
-                    }
-                    
-                    if (source == "KANTOR") {
-                        Button(
-                            onClick = { showCityPicker = true },
-                            modifier = Modifier.weight(0.6f),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary
-                            )
-                        ) {
-                            Text(
-                                KANTOR_CITIES.find { it.first == kantorCity }?.second ?: kantorCity,
-                                fontSize = 11.sp
-                            )
-                        }
+                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                        Text("KANTOR", fontSize = 13.sp)
+                        Text("kurstoday.com.ua", fontSize = 8.sp)
                     }
                 }
             }
 
             Spacer(Modifier.height(12.dp))
 
+            // Час оновлення
             lastUpdate?.let {
                 Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Кроскурс (один рядок)
+            // Кроскурс USD/EUR (ОДИН РЯДОК)
             if (rates.isNotEmpty()) {
                 val usdToEur = convert(1.0, "USD", "EUR", rates)
                 val eurToUsd = convert(1.0, "EUR", "USD", rates)
@@ -635,7 +628,7 @@ fun MainScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
-            // Поле введення
+            // Поле введення з прапором зліва і кнопкою оновлення справа
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -671,6 +664,7 @@ fun MainScreen(
 
             Spacer(Modifier.height(12.dp))
 
+            // Завантаження
             if (isLoading) {
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp))
@@ -681,7 +675,7 @@ fun MainScreen(
             }
         }
 
-        // Список валют
+        // Список валют - скролиться
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -694,13 +688,13 @@ fun MainScreen(
                 CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
                     val value = convert(amountDouble, baseCurrency, curr.code, rates)
                     
-                    // Тренди
-                    val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
-                    val previousRates = cache[cacheKey]?.previousRates
+                    // Отримуємо попередню ціну для порівняння
+                    val previousRates = cache[source]?.previousRates
                     val previousValue = if (previousRates != null && amountDouble > 0) {
                         convert(amountDouble, baseCurrency, curr.code, previousRates)
                     } else null
                     
+                    // Обчислюємо зміну
                     val diff = if (value != null && previousValue != null) value - previousValue else null
                     val trend = if (diff != null) {
                         when {
@@ -711,9 +705,9 @@ fun MainScreen(
                     } else null
                     
                     val trendColor = when (trend) {
-                        "🔺" -> androidx.compose.ui.graphics.Color(0xFFE53935)
-                        "🔻" -> androidx.compose.ui.graphics.Color(0xFF43A047)
-                        "🔷" -> androidx.compose.ui.graphics.Color(0xFF1E88E5)
+                        "🔺" -> androidx.compose.ui.graphics.Color(0xFFE53935) // червоний (дорожче)
+                        "🔻" -> androidx.compose.ui.graphics.Color(0xFF43A047) // зелений (дешевше)
+                        "🔷" -> androidx.compose.ui.graphics.Color(0xFF1E88E5) // синій (без змін)
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
 
@@ -721,113 +715,41 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 3.dp)
-                            .clickable {
-                                if (source == "KANTOR" && exchangers.isNotEmpty()) {
-                                    expandedCurrency = if (expandedCurrency == curr.code) null else curr.code
-                                }
-                            }
                     ) {
-                        Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${curr.flag} ${curr.code}",
+                                style = MaterialTheme.typography.titleMedium
+                            )
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                             ) {
                                 Text(
-                                    "${curr.flag} ${curr.code}",
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
-                                    // ДЛЯ KANTOR - показуємо BUY/SELL
-                                    if (source == "KANTOR") {
-                                        val rate = rates.firstOrNull { it.base == curr.code }
-                                        if (rate?.buy != null && rate.sell != null) {
-                                            Text(
-                                                "${String.format(Locale.US, "%.2f", rate.buy)} / ${String.format(Locale.US, "%.2f", rate.sell)}",
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                fontSize = 14.sp
-                                            )
-                                        } else {
-                                            Text("—", fontSize = 14.sp)
-                                        }
+                                    if (value != null) {
+                                        String.format(Locale.US, "%.2f", value)
                                     } else {
-                                        // Для NBU, NBP - тільки значення
-                                        Text(
-                                            if (value != null) {
-                                                String.format(Locale.US, "%.2f", value)
-                                            } else {
-                                                "НЕ ВИЗНАЧЕНО"
-                                            },
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = if (value != null) 
-                                                MaterialTheme.colorScheme.onSurface 
-                                            else 
-                                                MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = if (value != null) 16.sp else 12.sp
-                                        )
-                                    }
-                                    
-                                    if (trend != null) {
-                                        Text(
-                                            trend,
-                                            fontSize = 16.sp,
-                                            color = trendColor
-                                        )
-                                    }
-                                    
-                                    if (source == "KANTOR" && exchangers.isNotEmpty()) {
-                                        Text(
-                                            if (expandedCurrency == curr.code) "▲" else "▼",
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            // Розгорнутий список обмінників
-                            if (source == "KANTOR" && expandedCurrency == curr.code) {
-                                Divider()
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp)
-                                ) {
+                                        "НЕ ВИЗНАЧЕНО"
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (value != null) 
+                                        MaterialTheme.colorScheme.onSurface 
+                                    else 
+                                        MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = if (value != null) 16.sp else 12.sp
+                                )
+                                if (trend != null) {
                                     Text(
-                                        "📍 Обмінники ${KANTOR_CITIES.find { it.first == kantorCity }?.second}:",
-                                        fontSize = 11.sp,
-                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(bottom = 8.dp)
+                                        trend,
+                                        fontSize = 16.sp,
+                                        color = trendColor
                                     )
-                                    
-                                    exchangers.forEach { exchanger ->
-                                        val rate = exchanger.rates[curr.code]
-                                        if (rate?.buy != null || rate?.sell != null) {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 4.dp),
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Text(
-                                                    exchanger.name,
-                                                    fontSize = 12.sp,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                Text(
-                                                    "${rate?.buy?.let { String.format(Locale.US, "%.2f", it) } ?: "—"} / ${rate?.sell?.let { String.format(Locale.US, "%.2f", it) } ?: "—"}",
-                                                    fontSize = 12.sp,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                                )
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -839,7 +761,7 @@ fun MainScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Криптовалюти
+            // Криптовалюти BTC та ETH
             if (btcPrice != null) {
                 Card(
                     modifier = Modifier
@@ -852,7 +774,10 @@ fun MainScreen(
                             .padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("₿ BTC", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "₿ BTC",
+                            style = MaterialTheme.typography.titleMedium
+                        )
                         Text(
                             String.format(Locale.US, "%.2f", btcPrice) + " USD",
                             style = MaterialTheme.typography.bodyLarge,
@@ -874,7 +799,10 @@ fun MainScreen(
                             .padding(14.dp),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Ξ ETH", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Ξ ETH",
+                            style = MaterialTheme.typography.titleMedium
+                        )
                         Text(
                             String.format(Locale.US, "%.2f", ethPrice) + " USD",
                             style = MaterialTheme.typography.bodyLarge,
@@ -913,34 +841,6 @@ fun MainScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showCurrencyPicker = false }) {
-                    Text("Закрити")
-                }
-            }
-        )
-    }
-    
-    // Діалог вибору міста
-    if (showCityPicker) {
-        AlertDialog(
-            onDismissRequest = { showCityPicker = false },
-            title = { Text("Оберіть місто") },
-            text = {
-                Column {
-                    KANTOR_CITIES.forEach { (cityCode, cityName) ->
-                        TextButton(
-                            onClick = {
-                                kantorCity = cityCode
-                                showCityPicker = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(cityName, modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCityPicker = false }) {
                     Text("Закрити")
                 }
             }
