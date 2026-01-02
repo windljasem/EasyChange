@@ -112,10 +112,7 @@ val CURRENCIES = listOf(
     CurrencyInfo("USD", "🇺🇸", "Долар США"),
     CurrencyInfo("EUR", "🇪🇺", "Євро"),
     CurrencyInfo("PLN", "🇵🇱", "Злотий"),
-    CurrencyInfo("GBP", "🇬🇧", "Фунт"),
-    CurrencyInfo("CHF", "🇨🇭", "Франк"),
-    CurrencyInfo("CZK", "🇨🇿", "Крона"),
-    CurrencyInfo("CNY", "🇨🇳", "Юань")
+    CurrencyInfo("GBP", "🇬🇧", "Фунт")
 )
 
 val KANTOR_CITIES = listOf(
@@ -185,13 +182,8 @@ fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? 
 data class KantorAverageResponse(
     val usd: KantorCurrencyRate?,
     val eur: KantorCurrencyRate?,
-    val rur: KantorCurrencyRate?,
-    val gbp: KantorCurrencyRate?,
-    val chf: KantorCurrencyRate?,
     val pln: KantorCurrencyRate?,
-    val czk: KantorCurrencyRate?,
-    val cny: KantorCurrencyRate?,
-    val cad: KantorCurrencyRate?
+    val gbp: KantorCurrencyRate?
 )
 
 data class KantorCurrencyRate(
@@ -249,13 +241,8 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             val currencyMap = mapOf(
                 "USD" to avgData.usd,
                 "EUR" to avgData.eur,
-                "RUR" to avgData.rur,
-                "GBP" to avgData.gbp,
-                "CHF" to avgData.chf,
                 "PLN" to avgData.pln,
-                "CZK" to avgData.czk,
-                "CNY" to avgData.cny,
-                "CAD" to avgData.cad
+                "GBP" to avgData.gbp
             )
             
             currencyMap.forEach { (code, rate) ->
