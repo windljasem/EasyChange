@@ -375,8 +375,8 @@ fun MainScreen(
                 try {
                     Log.d("EasyChange", "Loading from: $source")
                     
-                    val newRates: List<Fx>
-                    val newExchangers: List<KantorExchanger>
+                    var newRates: List<Fx>
+                    var newExchangers: List<KantorExchanger>
                     
                     when (source) {
                         "NBU" -> {
