@@ -239,9 +239,12 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             // Парсимо JSON
             val gson = com.google.gson.Gson()
             val avgData = try {
-                gson.fromJson(avgJson, KantorApiResponse::class.java)
+                val parsed = gson.fromJson(avgJson, KantorApiResponse::class.java)
+                Log.d("KANTOR", "JSON parsed successfully, result size: ${parsed.result.size}")
+                parsed
             } catch (e: Exception) {
                 Log.e("KANTOR", "JSON parse error: ${e.message}")
+                Log.e("KANTOR", "JSON content was: $avgJson")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
@@ -764,13 +767,22 @@ fun MainScreen(
             val amountDouble = amount.toDoubleOrNull() ?: 0.0
 
             if (rates.isNotEmpty()) {
-                Log.d("UI", "Displaying ${rates.size} rates for source: $source")
+                Log.d("UI", "=== Displaying rates ===")
+                Log.d("UI", "Source: $source")
+                Log.d("UI", "Total rates: ${rates.size}")
+                Log.d("UI", "Base currency: $baseCurrency")
+                Log.d("UI", "Amount: $amountDouble")
+                
+                rates.take(3).forEach { r ->
+                    Log.d("UI", "Rate sample: ${r.base}/${r.quote} = mid:${r.mid}, buy:${r.buy}, sell:${r.sell}")
+                }
+                
                 CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
                     val value = convert(amountDouble, baseCurrency, curr.code, rates)
                     
                     if (source == "KANTOR") {
                         val fx = rates.firstOrNull { it.base == curr.code && it.quote == "UAH" }
-                        Log.d("UI", "KANTOR ${curr.code}: fx=$fx, buy=${fx?.buy}, sell=${fx?.sell}")
+                        Log.d("UI", "KANTOR ${curr.code}: fx=${fx != null}, buy=${fx?.buy}, sell=${fx?.sell}, value=$value")
                     }
                     
                     // Отримуємо попередню ціну для порівняння
@@ -822,22 +834,33 @@ fun MainScreen(
                                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                                 ) {
                                     if (source == "KANTOR") {
+                                        // Для KANTOR показуємо buy/sell
                                         val fx = rates.firstOrNull { it.base == curr.code && it.quote == "UAH" }
                                         if (fx?.buy != null && fx.sell != null) {
                                             Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                                                 Text(
                                                     "К: ${String.format(Locale.US, "%.2f", fx.buy)}",
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.primary
+                                                    fontSize = 12.sp,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                                 )
                                                 Text(
                                                     "П: ${String.format(Locale.US, "%.2f", fx.sell)}",
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.secondary
+                                                    fontSize = 12.sp,
+                                                    color = MaterialTheme.colorScheme.secondary,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                                                 )
                                             }
+                                        } else {
+                                            Text(
+                                                "НЕ ВИЗНАЧЕНО",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 12.sp
+                                            )
                                         }
                                     } else {
+                                        // Для NBU/NBP показуємо конвертовану суму
                                         Text(
                                             if (value != null) {
                                                 String.format(Locale.US, "%.2f", value)
