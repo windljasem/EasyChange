@@ -210,37 +210,93 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             Log.d("KANTOR", "HTML length: ${html.length} chars")
             Log.d("KANTOR", "HTML preview (first 500 chars): ${html.take(500)}")
             
+            // Зберігаємо HTML для аналізу
+            try {
+                val htmlFile = java.io.File("/storage/emulated/0/Download/kantor_debug.html")
+                htmlFile.writeText(html)
+                Log.d("KANTOR", "HTML saved to: ${htmlFile.absolutePath}")
+            } catch (e: Exception) {
+                Log.w("KANTOR", "Could not save HTML: ${e.message}")
+            }
+            
+            // Шукаємо таблицю з курсами (будь-яку структуру з USD, EUR)
+            val tableSearchPatterns = listOf(
+                """<td[^>]*>\s*(?:<[^>]*>)*\s*USD\s*(?:<[^>]*>)*\s*</td>""".toRegex(RegexOption.IGNORE_CASE),
+                """USD.*?[\d.]+.*?[\d.]+""".toRegex(RegexOption.DOT_MATCHES_ALL),
+                """class="[^"]*currency[^"]*"[^>]*>USD""".toRegex(RegexOption.IGNORE_CASE)
+            )
+            
+            tableSearchPatterns.forEachIndexed { index, pattern ->
+                val matches = pattern.findAll(html)
+                Log.d("KANTOR", "Pattern $index found ${matches.count()} matches")
+                matches.take(3).forEach { match ->
+                    Log.d("KANTOR", "Pattern $index sample: ${match.value.take(200)}")
+                }
+            }
+            
             // Парсимо середні курси (верхня таблиця)
             val avgRates = mutableListOf<Fx>()
             
             Log.d("KANTOR", "Starting to parse average rates table...")
             
-            // Regex для таблиці: <td>USD</td>...<td>42.13</td><td>42.48</td>
-            val tablePattern = """<td[^>]*>\s*(?:<img[^>]*>)?\s*([A-Z]{3})</td>.*?<td[^>]*>([0-9.]+)</td>\s*<td[^>]*>([0-9.]+)</td>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            // Спробуємо різні варіанти regex
+            val patterns = listOf(
+                // Варіант 1: Оригінальний
+                """<td[^>]*>\s*(?:<img[^>]*>)?\s*([A-Z]{3})</td>.*?<td[^>]*>([0-9.]+)</td>\s*<td[^>]*>([0-9.]+)</td>""",
+                // Варіант 2: Без img
+                """<td[^>]*>\s*([A-Z]{3})\s*</td>.*?<td[^>]*>\s*([0-9.]+)\s*</td>\s*<td[^>]*>\s*([0-9.]+)\s*</td>""",
+                // Варіант 3: Більш гнучкий
+                """(?:<td[^>]*>)[^<]*([A-Z]{3})[^<]*(?:</td>).*?(?:<td[^>]*>)\s*([0-9.]+)\s*(?:</td>).*?(?:<td[^>]*>)\s*([0-9.]+)\s*(?:</td>)""",
+                // Варіант 4: З class або без
+                """<td[^>]*>\s*(?:<[^>]*>)*([A-Z]{3})(?:</[^>]*>)*\s*</td>[^<]*<td[^>]*>([0-9.]+)</td>[^<]*<td[^>]*>([0-9.]+)</td>"""
+            )
             
-            val matches = tablePattern.findAll(html)
-            Log.d("KANTOR", "Found ${matches.count()} regex matches")
-            
-            tablePattern.findAll(html).forEach { match ->
-                try {
-                    val code = match.groupValues[1]
-                    val buyStr = match.groupValues[2]
-                    val sellStr = match.groupValues[3]
-                    
-                    Log.d("KANTOR", "Match: code=$code, buy=$buyStr, sell=$sellStr")
-                    
-                    val buy = buyStr.toDoubleOrNull()
-                    val sell = sellStr.toDoubleOrNull()
-                    
-                    if (buy != null && sell != null && CURRENCIES.any { it.code == code }) {
-                        val mid = (buy + sell) / 2.0
-                        avgRates.add(Fx(code, "UAH", buy, sell, mid))
-                        Log.d("KANTOR", "✓ Added avg: $code = buy:$buy / sell:$sell / mid:$mid")
-                    } else {
-                        Log.w("KANTOR", "✗ Skipped: code=$code (in CURRENCIES: ${CURRENCIES.any { it.code == code }}), buy=$buy, sell=$sell")
+            patterns.forEachIndexed { index, patternStr ->
+                Log.d("KANTOR", "Trying pattern #$index...")
+                val pattern = patternStr.toRegex(RegexOption.DOT_MATCHES_ALL)
+                val matches = pattern.findAll(html).toList()
+                Log.d("KANTOR", "Pattern #$index found ${matches.size} matches")
+                
+                if (matches.isNotEmpty() && avgRates.isEmpty()) {
+                    // Використовуємо цей pattern
+                    Log.d("KANTOR", "✓ Using pattern #$index")
+                    matches.forEach { match ->
+                        try {
+                            val code = match.groupValues[1]
+                            val buyStr = match.groupValues[2]
+                            val sellStr = match.groupValues[3]
+                            
+                            Log.d("KANTOR", "Match: code=$code, buy=$buyStr, sell=$sellStr")
+                            
+                            val buy = buyStr.toDoubleOrNull()
+                            val sell = sellStr.toDoubleOrNull()
+                            
+                            if (buy != null && sell != null && CURRENCIES.any { it.code == code }) {
+                                val mid = (buy + sell) / 2.0
+                                avgRates.add(Fx(code, "UAH", buy, sell, mid))
+                                Log.d("KANTOR", "✓ Added avg: $code = buy:$buy / sell:$sell / mid:$mid")
+                            } else {
+                                Log.w("KANTOR", "✗ Skipped: code=$code (in CURRENCIES: ${CURRENCIES.any { it.code == code }}), buy=$buy, sell=$sell")
+                            }
+                        } catch (e: Exception) {
+                            Log.w("KANTOR", "Error parsing avg rate: ${e.message}")
+                        }
                     }
-                } catch (e: Exception) {
-                    Log.w("KANTOR", "Error parsing avg rate: ${e.message}")
+                }
+            }
+            
+            if (avgRates.isEmpty()) {
+                Log.e("KANTOR", "⚠ No patterns worked! Need to check HTML structure manually")
+                
+                // Шукаємо USD в HTML та показуємо контекст
+                val usdIndex = html.indexOf("USD", ignoreCase = true)
+                if (usdIndex != -1) {
+                    val start = maxOf(0, usdIndex - 300)
+                    val end = minOf(html.length, usdIndex + 300)
+                    val context = html.substring(start, end)
+                    Log.e("KANTOR", "USD context (±300 chars):\n$context")
+                } else {
+                    Log.e("KANTOR", "USD not found in HTML at all!")
                 }
             }
             
