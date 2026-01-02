@@ -186,35 +186,58 @@ fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? 
 suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>> {
     return withContext(Dispatchers.IO) {
         try {
+            Log.d("KANTOR", "=== Starting parse for city: $city ===")
             val client = OkHttpClient()
             val request = Request.Builder()
                 .url("https://kurstoday.com.ua/$city")
                 .build()
             
+            Log.d("KANTOR", "Requesting URL: https://kurstoday.com.ua/$city")
             val httpResponse = client.newCall(request).execute()
+            Log.d("KANTOR", "Response code: ${httpResponse.code()}")
+            
             if (!httpResponse.isSuccessful) {
                 Log.e("KANTOR", "HTTP error: ${httpResponse.code()}")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            val html = httpResponse.body()?.string() ?: return@withContext Pair(emptyList(), emptyList())
+            val html = httpResponse.body()?.string()
+            if (html == null) {
+                Log.e("KANTOR", "Response body is null")
+                return@withContext Pair(emptyList(), emptyList())
+            }
+            
+            Log.d("KANTOR", "HTML length: ${html.length} chars")
+            Log.d("KANTOR", "HTML preview (first 500 chars): ${html.take(500)}")
             
             // Парсимо середні курси (верхня таблиця)
             val avgRates = mutableListOf<Fx>()
             
+            Log.d("KANTOR", "Starting to parse average rates table...")
+            
             // Regex для таблиці: <td>USD</td>...<td>42.13</td><td>42.48</td>
             val tablePattern = """<td[^>]*>\s*(?:<img[^>]*>)?\s*([A-Z]{3})</td>.*?<td[^>]*>([0-9.]+)</td>\s*<td[^>]*>([0-9.]+)</td>""".toRegex(RegexOption.DOT_MATCHES_ALL)
+            
+            val matches = tablePattern.findAll(html)
+            Log.d("KANTOR", "Found ${matches.count()} regex matches")
             
             tablePattern.findAll(html).forEach { match ->
                 try {
                     val code = match.groupValues[1]
-                    val buy = match.groupValues[2].toDoubleOrNull()
-                    val sell = match.groupValues[3].toDoubleOrNull()
+                    val buyStr = match.groupValues[2]
+                    val sellStr = match.groupValues[3]
+                    
+                    Log.d("KANTOR", "Match: code=$code, buy=$buyStr, sell=$sellStr")
+                    
+                    val buy = buyStr.toDoubleOrNull()
+                    val sell = sellStr.toDoubleOrNull()
                     
                     if (buy != null && sell != null && CURRENCIES.any { it.code == code }) {
                         val mid = (buy + sell) / 2.0
                         avgRates.add(Fx(code, "UAH", buy, sell, mid))
-                        Log.d("KANTOR", "Parsed avg: $code = $buy/$sell")
+                        Log.d("KANTOR", "✓ Added avg: $code = buy:$buy / sell:$sell / mid:$mid")
+                    } else {
+                        Log.w("KANTOR", "✗ Skipped: code=$code (in CURRENCIES: ${CURRENCIES.any { it.code == code }}), buy=$buy, sell=$sell")
                     }
                 } catch (e: Exception) {
                     Log.w("KANTOR", "Error parsing avg rate: ${e.message}")
@@ -277,7 +300,11 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                 }
             }
             
+            Log.d("KANTOR", "=== Parse complete ===")
             Log.d("KANTOR", "Total: ${avgRates.size} avg rates, ${exchangers.size} exchangers")
+            avgRates.forEach { 
+                Log.d("KANTOR", "Final rate: ${it.base}/${it.quote} = buy:${it.buy}, sell:${it.sell}, mid:${it.mid}")
+            }
             Pair(avgRates, exchangers)
             
         } catch (e: Exception) {
@@ -742,8 +769,14 @@ fun MainScreen(
             val amountDouble = amount.toDoubleOrNull() ?: 0.0
 
             if (rates.isNotEmpty()) {
+                Log.d("UI", "Displaying ${rates.size} rates for source: $source")
                 CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
                     val value = convert(amountDouble, baseCurrency, curr.code, rates)
+                    
+                    if (source == "KANTOR") {
+                        val fx = rates.firstOrNull { it.base == curr.code && it.quote == "UAH" }
+                        Log.d("UI", "KANTOR ${curr.code}: fx=$fx, buy=${fx?.buy}, sell=${fx?.sell}")
+                    }
                     
                     // Отримуємо попередню ціну для порівняння
                     val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
