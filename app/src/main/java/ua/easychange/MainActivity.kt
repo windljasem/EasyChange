@@ -181,31 +181,24 @@ fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? 
     return null
 }
 
-// KANTOR API моделі
-data class KantorApiResponse(
-    val result: List<KantorApiRate>
+// KANTOR API моделі (реальна структура)
+data class KantorAverageResponse(
+    val usd: KantorCurrencyRate?,
+    val eur: KantorCurrencyRate?,
+    val rur: KantorCurrencyRate?,
+    val gbp: KantorCurrencyRate?,
+    val chf: KantorCurrencyRate?,
+    val pln: KantorCurrencyRate?,
+    val czk: KantorCurrencyRate?,
+    val cny: KantorCurrencyRate?
 )
 
-data class KantorApiRate(
-    val currency: String,
-    val buy: Double?,
-    val sale: Double?
+data class KantorCurrencyRate(
+    val buy: String,  // API повертає string, а не double
+    val sel: String   // "sel", не "sale"!
 )
 
-data class KantorServiceResponse(
-    val result: List<KantorServiceExchanger>
-)
-
-data class KantorServiceExchanger(
-    val id: Int,
-    val name: String,
-    val currencies: Map<String, KantorServiceCurrency>
-)
-
-data class KantorServiceCurrency(
-    val buy: Double?,
-    val sale: Double?
-)
+// Service API поки відкладаємо - спочатку працюємо з average
 
 // JSON API для KANTOR (замість HTML парсингу)
 suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>> {
@@ -239,8 +232,8 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             // Парсимо JSON
             val gson = com.google.gson.Gson()
             val avgData = try {
-                val parsed = gson.fromJson(avgJson, KantorApiResponse::class.java)
-                Log.d("KANTOR", "JSON parsed successfully, result size: ${parsed.result.size}")
+                val parsed = gson.fromJson(avgJson, KantorAverageResponse::class.java)
+                Log.d("KANTOR", "JSON parsed successfully")
                 parsed
             } catch (e: Exception) {
                 Log.e("KANTOR", "JSON parse error: ${e.message}")
@@ -250,16 +243,38 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             
             // Конвертуємо в Fx
             val avgRates = mutableListOf<Fx>()
-            avgData.result.forEach { rate ->
-                val code = rate.currency.uppercase()
-                if (CURRENCIES.any { it.code == code } && rate.buy != null && rate.sale != null) {
-                    val mid = (rate.buy + rate.sale) / 2.0
-                    avgRates.add(Fx(code, "UAH", rate.buy, rate.sale, mid))
-                    Log.d("KANTOR", "✓ Average rate: $code = buy:${rate.buy} / sell:${rate.sale} / mid:$mid")
+            
+            // Мапа валют з відповіді
+            val currencyMap = mapOf(
+                "USD" to avgData.usd,
+                "EUR" to avgData.eur,
+                "RUR" to avgData.rur,
+                "GBP" to avgData.gbp,
+                "CHF" to avgData.chf,
+                "PLN" to avgData.pln,
+                "CZK" to avgData.czk,
+                "CNY" to avgData.cny
+            )
+            
+            currencyMap.forEach { (code, rate) ->
+                if (rate != null && CURRENCIES.any { it.code == code }) {
+                    // API повертає "—" для відсутніх курсів
+                    val buyDouble = if (rate.buy == "—" || rate.buy == "тАФ") null else rate.buy.toDoubleOrNull()
+                    val sellDouble = if (rate.sel == "—" || rate.sel == "тАФ") null else rate.sel.toDoubleOrNull()
+                    
+                    if (buyDouble != null && sellDouble != null) {
+                        val mid = (buyDouble + sellDouble) / 2.0
+                        avgRates.add(Fx(code, "UAH", buyDouble, sellDouble, mid))
+                        Log.d("KANTOR", "✓ Average rate: $code = buy:$buyDouble / sell:$sellDouble / mid:$mid")
+                    } else {
+                        Log.d("KANTOR", "✗ Skipped $code: buy=${rate.buy}, sel=${rate.sel}")
+                    }
                 }
             }
             
-            // Завантажуємо детальні курси обмінників
+            // TODO: Завантаження детальних курсів обмінників (поки відкладено)
+            val exchangers = mutableListOf<KantorExchanger>()
+            /*
             val serviceRequest = Request.Builder()
                 .url("https://kurstoday.com.ua/api/service/$city")
                 .build()
@@ -268,37 +283,14 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             val serviceResponse = client.newCall(serviceRequest).execute()
             Log.d("KANTOR", "Service API response code: ${serviceResponse.code()}")
             
-            val exchangers = mutableListOf<KantorExchanger>()
-            
             if (serviceResponse.isSuccessful) {
                 val serviceJson = serviceResponse.body()?.string()
                 if (serviceJson != null) {
                     Log.d("KANTOR", "Service API response: ${serviceJson.take(500)}")
-                    
-                    val serviceData = try {
-                        gson.fromJson(serviceJson, KantorServiceResponse::class.java)
-                    } catch (e: Exception) {
-                        Log.e("KANTOR", "Service JSON parse error: ${e.message}")
-                        null
-                    }
-                    
-                    serviceData?.result?.forEach { exch ->
-                        val ratesMap = mutableMapOf<String, KantorRate>()
-                        exch.currencies.forEach { (currCode, currData) ->
-                            val code = currCode.uppercase()
-                            if (CURRENCIES.any { it.code == code }) {
-                                ratesMap[code] = KantorRate(currData.buy, currData.sale)
-                            }
-                        }
-                        if (ratesMap.isNotEmpty()) {
-                            exchangers.add(KantorExchanger(exch.id.toString(), exch.name, ratesMap))
-                            Log.d("KANTOR", "✓ Exchanger: ${exch.name} (${ratesMap.size} currencies)")
-                        }
-                    }
+                    // TODO: Парсинг service API
                 }
-            } else {
-                Log.w("KANTOR", "Service API failed, continuing with average rates only")
             }
+            */
             
             Log.d("KANTOR", "=== Parse complete ===")
             Log.d("KANTOR", "Total: ${avgRates.size} avg rates, ${exchangers.size} exchangers")
