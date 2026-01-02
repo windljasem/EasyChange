@@ -190,7 +190,8 @@ data class KantorAverageResponse(
     val chf: KantorCurrencyRate?,
     val pln: KantorCurrencyRate?,
     val czk: KantorCurrencyRate?,
-    val cny: KantorCurrencyRate?
+    val cny: KantorCurrencyRate?,
+    val cad: KantorCurrencyRate?
 )
 
 data class KantorCurrencyRate(
@@ -253,7 +254,8 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                 "CHF" to avgData.chf,
                 "PLN" to avgData.pln,
                 "CZK" to avgData.czk,
-                "CNY" to avgData.cny
+                "CNY" to avgData.cny,
+                "CAD" to avgData.cad
             )
             
             currencyMap.forEach { (code, rate) ->
@@ -770,6 +772,9 @@ fun MainScreen(
                 }
                 
                 CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
+                    // Для KANTOR UAH потрібна особлива логіка
+                    val isKantorUah = source == "KANTOR" && baseCurrency != "UAH" && curr.code == "UAH"
+                    
                     val value = convert(amountDouble, baseCurrency, curr.code, rates)
                     
                     if (source == "KANTOR") {
@@ -815,33 +820,56 @@ fun MainScreen(
                                     .fillMaxWidth()
                                     .padding(14.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                verticalAlignment = androidx.compose.ui.Alignment.Top
                             ) {
+                                // Ліва частина - назва валюти
                                 Text(
                                     "${curr.flag} ${curr.code}",
-                                    style = MaterialTheme.typography.titleMedium
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.alignByBaseline()
                                 )
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                                ) {
-                                    if (source == "KANTOR") {
-                                        // Для KANTOR показуємо buy/sell
-                                        val fx = rates.firstOrNull { it.base == curr.code && it.quote == "UAH" }
-                                        if (fx?.buy != null && fx.sell != null) {
-                                            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                                                Text(
-                                                    "К: ${String.format(Locale.US, "%.2f", fx.buy)}",
-                                                    fontSize = 12.sp,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                                )
-                                                Text(
-                                                    "П: ${String.format(Locale.US, "%.2f", fx.sell)}",
-                                                    fontSize = 12.sp,
-                                                    color = MaterialTheme.colorScheme.secondary,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                                                )
+                                
+                                if (source == "KANTOR") {
+                                    // Для KANTOR - два стовпці: курси та калькулятор
+                                    if (isKantorUah) {
+                                        // UAH - зворотна конвертація (базова валюта → UAH)
+                                        val baseFx = rates.firstOrNull { it.base == baseCurrency && it.quote == "UAH" }
+                                        if (baseFx?.buy != null && baseFx.sell != null && amountDouble > 0) {
+                                            Row(
+                                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                                verticalAlignment = androidx.compose.ui.Alignment.Top
+                                            ) {
+                                                // Стовпець 1: Курси
+                                                Column(horizontalAlignment = androidx.compose.ui.Alignment.Start) {
+                                                    Text(
+                                                        "К: ${String.format(Locale.US, "%.2f", baseFx.buy)}",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    Text(
+                                                        "П: ${String.format(Locale.US, "%.2f", baseFx.sell)}",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                }
+                                                
+                                                // Стовпець 2: Калькулятор (скільки UAH за вказану суму валюти)
+                                                Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                                                    val buyCalc = amountDouble * baseFx.buy
+                                                    Text(
+                                                        "${String.format(Locale.US, "%.2f", buyCalc)} ₴",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    val sellCalc = amountDouble * baseFx.sell
+                                                    Text(
+                                                        "${String.format(Locale.US, "%.2f", sellCalc)} ₴",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                }
                                             }
                                         } else {
                                             Text(
@@ -852,7 +880,75 @@ fun MainScreen(
                                             )
                                         }
                                     } else {
-                                        // Для NBU/NBP показуємо конвертовану суму
+                                        // Інші валюти
+                                        val fx = rates.firstOrNull { it.base == curr.code && it.quote == "UAH" }
+                                        if (fx?.buy != null && fx.sell != null) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                            verticalAlignment = androidx.compose.ui.Alignment.Top
+                                        ) {
+                                            // Стовпець 1: Курси (К/П)
+                                            Column(horizontalAlignment = androidx.compose.ui.Alignment.Start) {
+                                                Text(
+                                                    "К: ${String.format(Locale.US, "%.2f", fx.buy)}",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Text(
+                                                    "П: ${String.format(Locale.US, "%.2f", fx.sell)}",
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.secondary
+                                                )
+                                            }
+                                            
+                                            // Стовпець 2: Калькулятор
+                                            if (amountDouble > 0) {
+                                                Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                                                    // Купівля (банк купує валюту у вас за UAH)
+                                                    val buyCalc = amountDouble * fx.buy
+                                                    Text(
+                                                        "${String.format(Locale.US, "%.2f", buyCalc)} ₴",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    // Продаж (банк продає валюту вам за UAH)
+                                                    val sellCalc = amountDouble * fx.sell
+                                                    Text(
+                                                        "${String.format(Locale.US, "%.2f", sellCalc)} ₴",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        
+                                        // Тренд (якщо є)
+                                        if (trend != null) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                trend,
+                                                fontSize = 16.sp,
+                                                color = trendColor,
+                                                modifier = Modifier.alignByBaseline()
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            "НЕ ВИЗНАЧЕНО",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    }  // Закриваємо else для не-UAH валют
+                                } else {
+                                    // Для NBU/NBP - як раніше
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                                    ) {
                                         Text(
                                             if (value != null) {
                                                 String.format(Locale.US, "%.2f", value)
@@ -866,13 +962,13 @@ fun MainScreen(
                                                 MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = if (value != null) 16.sp else 12.sp
                                         )
-                                    }
-                                    if (trend != null) {
-                                        Text(
-                                            trend,
-                                            fontSize = 16.sp,
-                                            color = trendColor
-                                        )
+                                        if (trend != null) {
+                                            Text(
+                                                trend,
+                                                fontSize = 16.sp,
+                                                color = trendColor
+                                            )
+                                        }
                                     }
                                 }
                             }
