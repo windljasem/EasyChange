@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response as OkHttpResponse
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -192,11 +193,11 @@ suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             
             val httpResponse = client.newCall(request).execute()
             if (!httpResponse.isSuccessful) {
-                Log.e("KANTOR", "HTTP error: ${httpResponse.code}")
+                Log.e("KANTOR", "HTTP error: ${httpResponse.code()}")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            val html = httpResponse.body?.string() ?: return@withContext Pair(emptyList(), emptyList())
+            val html = httpResponse.body()?.string() ?: return@withContext Pair(emptyList(), emptyList())
             
             // Парсимо середні курси (верхня таблиця)
             val avgRates = mutableListOf<Fx>()
