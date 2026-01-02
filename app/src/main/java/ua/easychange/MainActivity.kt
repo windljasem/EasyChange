@@ -115,7 +115,6 @@ val CURRENCIES = listOf(
     CurrencyInfo("GBP", "🇬🇧", "Фунт"),
     CurrencyInfo("CHF", "🇨🇭", "Франк"),
     CurrencyInfo("CZK", "🇨🇿", "Крона"),
-    CurrencyInfo("CAD", "🇨🇦", "Дол. Канади"),
     CurrencyInfo("CNY", "🇨🇳", "Юань")
 )
 
@@ -182,185 +181,125 @@ fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? 
     return null
 }
 
-// HTML Парсинг для KANTOR
-suspend fun parseKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>> {
+// KANTOR API моделі
+data class KantorApiResponse(
+    val result: List<KantorApiRate>
+)
+
+data class KantorApiRate(
+    val currency: String,
+    val buy: Double?,
+    val sale: Double?
+)
+
+data class KantorServiceResponse(
+    val result: List<KantorServiceExchanger>
+)
+
+data class KantorServiceExchanger(
+    val id: Int,
+    val name: String,
+    val currencies: Map<String, KantorServiceCurrency>
+)
+
+data class KantorServiceCurrency(
+    val buy: Double?,
+    val sale: Double?
+)
+
+// JSON API для KANTOR (замість HTML парсингу)
+suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>> {
     return withContext(Dispatchers.IO) {
         try {
-            Log.d("KANTOR", "=== Starting parse for city: $city ===")
+            Log.d("KANTOR", "=== Fetching JSON API for city: $city ===")
             val client = OkHttpClient()
-            val request = Request.Builder()
-                .url("https://kurstoday.com.ua/$city")
+            
+            // Завантажуємо середні курси
+            val avgRequest = Request.Builder()
+                .url("https://kurstoday.com.ua/api/average/$city")
                 .build()
             
-            Log.d("KANTOR", "Requesting URL: https://kurstoday.com.ua/$city")
-            val httpResponse = client.newCall(request).execute()
-            Log.d("KANTOR", "Response code: ${httpResponse.code()}")
+            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/api/average/$city")
+            val avgResponse = client.newCall(avgRequest).execute()
+            Log.d("KANTOR", "Average API response code: ${avgResponse.code()}")
             
-            if (!httpResponse.isSuccessful) {
-                Log.e("KANTOR", "HTTP error: ${httpResponse.code()}")
+            if (!avgResponse.isSuccessful) {
+                Log.e("KANTOR", "Average API error: ${avgResponse.code()}")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            val html = httpResponse.body()?.string()
-            if (html == null) {
-                Log.e("KANTOR", "Response body is null")
+            val avgJson = avgResponse.body()?.string()
+            if (avgJson == null) {
+                Log.e("KANTOR", "Average API response body is null")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            Log.d("KANTOR", "HTML length: ${html.length} chars")
-            Log.d("KANTOR", "HTML preview (first 500 chars): ${html.take(500)}")
+            Log.d("KANTOR", "Average API response: ${avgJson.take(500)}")
             
-            // Зберігаємо HTML для аналізу
-            try {
-                val htmlFile = java.io.File("/storage/emulated/0/Download/kantor_debug.html")
-                htmlFile.writeText(html)
-                Log.d("KANTOR", "HTML saved to: ${htmlFile.absolutePath}")
+            // Парсимо JSON
+            val gson = com.google.gson.Gson()
+            val avgData = try {
+                gson.fromJson(avgJson, KantorApiResponse::class.java)
             } catch (e: Exception) {
-                Log.w("KANTOR", "Could not save HTML: ${e.message}")
+                Log.e("KANTOR", "JSON parse error: ${e.message}")
+                return@withContext Pair(emptyList(), emptyList())
             }
             
-            // Шукаємо таблицю з курсами (будь-яку структуру з USD, EUR)
-            val tableSearchPatterns = listOf(
-                """<td[^>]*>\s*(?:<[^>]*>)*\s*USD\s*(?:<[^>]*>)*\s*</td>""".toRegex(RegexOption.IGNORE_CASE),
-                """USD.*?[\d.]+.*?[\d.]+""".toRegex(RegexOption.DOT_MATCHES_ALL),
-                """class="[^"]*currency[^"]*"[^>]*>USD""".toRegex(RegexOption.IGNORE_CASE)
-            )
-            
-            tableSearchPatterns.forEachIndexed { index, pattern ->
-                val matches = pattern.findAll(html)
-                Log.d("KANTOR", "Pattern $index found ${matches.count()} matches")
-                matches.take(3).forEach { match ->
-                    Log.d("KANTOR", "Pattern $index sample: ${match.value.take(200)}")
-                }
-            }
-            
-            // Парсимо середні курси (верхня таблиця)
+            // Конвертуємо в Fx
             val avgRates = mutableListOf<Fx>()
-            
-            Log.d("KANTOR", "Starting to parse average rates table...")
-            
-            // Спробуємо різні варіанти regex
-            val patterns = listOf(
-                // Варіант 1: Оригінальний
-                """<td[^>]*>\s*(?:<img[^>]*>)?\s*([A-Z]{3})</td>.*?<td[^>]*>([0-9.]+)</td>\s*<td[^>]*>([0-9.]+)</td>""",
-                // Варіант 2: Без img
-                """<td[^>]*>\s*([A-Z]{3})\s*</td>.*?<td[^>]*>\s*([0-9.]+)\s*</td>\s*<td[^>]*>\s*([0-9.]+)\s*</td>""",
-                // Варіант 3: Більш гнучкий
-                """(?:<td[^>]*>)[^<]*([A-Z]{3})[^<]*(?:</td>).*?(?:<td[^>]*>)\s*([0-9.]+)\s*(?:</td>).*?(?:<td[^>]*>)\s*([0-9.]+)\s*(?:</td>)""",
-                // Варіант 4: З class або без
-                """<td[^>]*>\s*(?:<[^>]*>)*([A-Z]{3})(?:</[^>]*>)*\s*</td>[^<]*<td[^>]*>([0-9.]+)</td>[^<]*<td[^>]*>([0-9.]+)</td>"""
-            )
-            
-            patterns.forEachIndexed { index, patternStr ->
-                Log.d("KANTOR", "Trying pattern #$index...")
-                val pattern = patternStr.toRegex(RegexOption.DOT_MATCHES_ALL)
-                val matches = pattern.findAll(html).toList()
-                Log.d("KANTOR", "Pattern #$index found ${matches.size} matches")
-                
-                if (matches.isNotEmpty() && avgRates.isEmpty()) {
-                    // Використовуємо цей pattern
-                    Log.d("KANTOR", "✓ Using pattern #$index")
-                    matches.forEach { match ->
-                        try {
-                            val code = match.groupValues[1]
-                            val buyStr = match.groupValues[2]
-                            val sellStr = match.groupValues[3]
-                            
-                            Log.d("KANTOR", "Match: code=$code, buy=$buyStr, sell=$sellStr")
-                            
-                            val buy = buyStr.toDoubleOrNull()
-                            val sell = sellStr.toDoubleOrNull()
-                            
-                            if (buy != null && sell != null && CURRENCIES.any { it.code == code }) {
-                                val mid = (buy + sell) / 2.0
-                                avgRates.add(Fx(code, "UAH", buy, sell, mid))
-                                Log.d("KANTOR", "✓ Added avg: $code = buy:$buy / sell:$sell / mid:$mid")
-                            } else {
-                                Log.w("KANTOR", "✗ Skipped: code=$code (in CURRENCIES: ${CURRENCIES.any { it.code == code }}), buy=$buy, sell=$sell")
-                            }
-                        } catch (e: Exception) {
-                            Log.w("KANTOR", "Error parsing avg rate: ${e.message}")
-                        }
-                    }
+            avgData.result.forEach { rate ->
+                val code = rate.currency.uppercase()
+                if (CURRENCIES.any { it.code == code } && rate.buy != null && rate.sale != null) {
+                    val mid = (rate.buy + rate.sale) / 2.0
+                    avgRates.add(Fx(code, "UAH", rate.buy, rate.sale, mid))
+                    Log.d("KANTOR", "✓ Average rate: $code = buy:${rate.buy} / sell:${rate.sale} / mid:$mid")
                 }
             }
             
-            if (avgRates.isEmpty()) {
-                Log.e("KANTOR", "⚠ No patterns worked! Need to check HTML structure manually")
-                
-                // Шукаємо USD в HTML та показуємо контекст
-                val usdIndex = html.indexOf("USD", ignoreCase = true)
-                if (usdIndex != -1) {
-                    val start = maxOf(0, usdIndex - 300)
-                    val end = minOf(html.length, usdIndex + 300)
-                    val context = html.substring(start, end)
-                    Log.e("KANTOR", "USD context (±300 chars):\n$context")
-                } else {
-                    Log.e("KANTOR", "USD not found in HTML at all!")
-                }
-            }
+            // Завантажуємо детальні курси обмінників
+            val serviceRequest = Request.Builder()
+                .url("https://kurstoday.com.ua/api/service/$city")
+                .build()
             
-            // Парсимо обмінники
+            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/api/service/$city")
+            val serviceResponse = client.newCall(serviceRequest).execute()
+            Log.d("KANTOR", "Service API response code: ${serviceResponse.code()}")
+            
             val exchangers = mutableListOf<KantorExchanger>()
             
-            // Знаходимо ID обмінників в dropdown
-            val idPattern = """<option[^>]+value\s*=\s*["'](\d+)["'][^>]*>(.*?)</option>""".toRegex()
-            val exchangerIds = mutableMapOf<String, String>()
-            
-            idPattern.findAll(html).forEach { match ->
-                val id = match.groupValues[1]
-                val name = match.groupValues[2]
-                    .replace("""<[^>]*>""".toRegex(), "")
-                    .replace("""#\d+\s*-\s*""".toRegex(), "")
-                    .trim()
-                if (name.isNotEmpty() && id.isNotEmpty()) {
-                    exchangerIds[id] = name
-                    Log.d("KANTOR", "Found exchanger: #$id - $name")
-                }
-            }
-            
-            // Парсимо таблиці обмінників
-            exchangerIds.forEach { (id, name) ->
-                try {
-                    // Шукаємо блок обмінника
-                    val blockPattern = """<div[^>]*id\s*=\s*["']#$id["'][^>]*>(.*?)</table>""".toRegex(RegexOption.DOT_MATCHES_ALL)
-                    val blockMatch = blockPattern.find(html)
+            if (serviceResponse.isSuccessful) {
+                val serviceJson = serviceResponse.body()?.string()
+                if (serviceJson != null) {
+                    Log.d("KANTOR", "Service API response: ${serviceJson.take(500)}")
                     
-                    if (blockMatch != null) {
-                        val block = blockMatch.groupValues[1]
+                    val serviceData = try {
+                        gson.fromJson(serviceJson, KantorServiceResponse::class.java)
+                    } catch (e: Exception) {
+                        Log.e("KANTOR", "Service JSON parse error: ${e.message}")
+                        null
+                    }
+                    
+                    serviceData?.result?.forEach { exch ->
                         val ratesMap = mutableMapOf<String, KantorRate>()
-                        
-                        // Парсимо рядки таблиці
-                        val ratePattern = """<tr[^>]*>.*?<td[^>]*>(?:<img[^>]*>)?\s*([A-Z]{3})</td>\s*<td[^>]*>([0-9.—\s]+)</td>\s*<td[^>]*>([0-9.—\s]+)</td>""".toRegex(RegexOption.DOT_MATCHES_ALL)
-                        
-                        ratePattern.findAll(block).forEach { rateMatch ->
-                            val currCode = rateMatch.groupValues[1]
-                            val buyText = rateMatch.groupValues[2].trim()
-                            val sellText = rateMatch.groupValues[3].trim()
-                            
-                            val buy = if (buyText == "—" || buyText.isEmpty()) null else buyText.toDoubleOrNull()
-                            val sell = if (sellText == "—" || sellText.isEmpty()) null else sellText.toDoubleOrNull()
-                            
-                            if (CURRENCIES.any { it.code == currCode }) {
-                                ratesMap[currCode] = KantorRate(buy, sell)
+                        exch.currencies.forEach { (currCode, currData) ->
+                            val code = currCode.uppercase()
+                            if (CURRENCIES.any { it.code == code }) {
+                                ratesMap[code] = KantorRate(currData.buy, currData.sale)
                             }
                         }
-                        
                         if (ratesMap.isNotEmpty()) {
-                            exchangers.add(KantorExchanger(id, name, ratesMap))
-                            Log.d("KANTOR", "Exchanger #$id ($name): ${ratesMap.size} rates")
+                            exchangers.add(KantorExchanger(exch.id.toString(), exch.name, ratesMap))
+                            Log.d("KANTOR", "✓ Exchanger: ${exch.name} (${ratesMap.size} currencies)")
                         }
                     }
-                } catch (e: Exception) {
-                    Log.w("KANTOR", "Error parsing exchanger #$id: ${e.message}")
                 }
+            } else {
+                Log.w("KANTOR", "Service API failed, continuing with average rates only")
             }
             
             Log.d("KANTOR", "=== Parse complete ===")
             Log.d("KANTOR", "Total: ${avgRates.size} avg rates, ${exchangers.size} exchangers")
-            avgRates.forEach { 
-                Log.d("KANTOR", "Final rate: ${it.base}/${it.quote} = buy:${it.buy}, sell:${it.sell}, mid:${it.mid}")
-            }
+            
             Pair(avgRates, exchangers)
             
         } catch (e: Exception) {
@@ -539,7 +478,7 @@ fun MainScreen(
 
                         "KANTOR" -> {
                             try {
-                                val (avgRates, exch) = parseKantorData(kantorCity)
+                                val (avgRates, exch) = fetchKantorData(kantorCity)
                                 newRates = avgRates
                                 newExchangers = exch
                             } catch (e: Exception) {
