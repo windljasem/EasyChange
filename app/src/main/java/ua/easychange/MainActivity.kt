@@ -814,36 +814,36 @@ fun MainScreen(
 
             Spacer(Modifier.height(16.dp))
         }
-    }
-
-    // Діалог вибору валюти
-    if (showCurrencyPicker) {
-        AlertDialog(
-            onDismissRequest = { showCurrencyPicker = false },
-            title = { Text("Оберіть базову валюту") },
-            text = {
-                Column {
-                    CURRENCIES.forEach { curr ->
-                        TextButton(
-                            onClick = {
-                                saveCurrency(curr.code)
-                                showCurrencyPicker = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                "${curr.flag} ${curr.code} - ${curr.name}",
+    
+        // Діалог вибору валюти
+        if (showCurrencyPicker) {
+            AlertDialog(
+                onDismissRequest = { showCurrencyPicker = false },
+                title = { Text("Оберіть базову валюту") },
+                text = {
+                    Column {
+                        CURRENCIES.forEach { curr ->
+                            TextButton(
+                                onClick = {
+                                    saveCurrency(curr.code)
+                                    showCurrencyPicker = false
+                                },
                                 modifier = Modifier.fillMaxWidth()
-                            )
+                            ) {
+                                Text(
+                                    "${curr.flag} ${curr.code} - ${curr.name}",
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showCurrencyPicker = false }) {
+                        Text("Закрити")
+                    }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCurrencyPicker = false }) {
-                    Text("Закрити")
-                }
-            }
-        )
+            )
+        }
     }
 }
