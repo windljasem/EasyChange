@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -345,7 +346,21 @@ class MainActivity : ComponentActivity() {
             .create(BinanceApi::class.java)
 
         setContent {
-            MaterialTheme {
+            MaterialTheme(
+                colorScheme = lightColorScheme(
+                    primary = Color(0xFF5E35B1),        // Фіолетовий для активних кнопок
+                    secondary = Color(0xFF78909C),      // Сіро-синій для вторинних елементів
+                    tertiary = Color(0xFF8D6E63),       // Коричневий для кнопки міста
+                    background = Color(0xFFECEFF1),     // Світло-сірий фон
+                    surface = Color(0xFFFFFFFF),        // Білий для карток
+                    surfaceVariant = Color(0xFFE8EAF6), // Світло-фіолетовий для картки кроскурсу
+                    onPrimary = Color(0xFFFFFFFF),      // Білий текст на primary
+                    onSecondary = Color(0xFFFFFFFF),    // Білий текст на secondary
+                    onBackground = Color(0xFF263238),   // Темно-сірий текст на фоні
+                    onSurface = Color(0xFF263238),      // Темно-сірий текст на картках
+                    onSurfaceVariant = Color(0xFF546E7A) // Сірий для вторинного тексту
+                )
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -654,7 +669,8 @@ fun MainScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         )
                     ) {
                         Row(
@@ -666,7 +682,7 @@ fun MainScreen(
                             Text(
                                 "Кроскурс",
                                 fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -799,7 +815,11 @@ fun MainScreen(
                             .padding(vertical = 3.dp)
                             .clickable(enabled = source == "KANTOR" && exchangers.isNotEmpty()) {
                                 expandedCurrency = if (expandedCurrency == curr.code) null else curr.code
-                            }
+                            },
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        )
                     ) {
                         Column {
                             Row(
@@ -1016,7 +1036,11 @@ fun MainScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 3.dp)
+                        .padding(vertical = 3.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 ) {
                     Row(
                         modifier = Modifier
@@ -1041,7 +1065,11 @@ fun MainScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 3.dp)
+                        .padding(vertical = 3.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 ) {
                     Row(
                         modifier = Modifier
