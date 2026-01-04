@@ -1086,7 +1086,7 @@ fun MainScreen(
 
             // Криптовалюти BTC та ETH
             if (btcPrice != null) {
-                val btcPriceValue = btcPrice // Локальна копія для smart cast
+                val btcPriceValue: Double = btcPrice // Явний тип Double (non-null)
                 
                 // Обчислюємо тренд BTC
                 val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
@@ -1151,7 +1151,7 @@ fun MainScreen(
             }
 
             if (ethPrice != null) {
-                val ethPriceValue = ethPrice // Локальна копія для smart cast
+                val ethPriceValue: Double = ethPrice // Явний тип Double (non-null)
                 
                 // Обчислюємо тренд ETH
                 val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
