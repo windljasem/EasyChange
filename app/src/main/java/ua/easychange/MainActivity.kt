@@ -1091,7 +1091,9 @@ fun MainScreen(
                 // Обчислюємо тренд BTC
                 val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
                 val previousBtc = cache[cacheKey]?.previousBtcPrice
-                val btcDiff = if (previousBtc != null) btcPriceValue - previousBtc else null
+                val btcDiff = if (previousBtc != null) {
+                    btcPriceValue - previousBtc
+                } else null
                 val btcTrend = if (btcDiff != null) {
                     when {
                         btcDiff > 10.0 -> "🔺"
@@ -1154,7 +1156,9 @@ fun MainScreen(
                 // Обчислюємо тренд ETH
                 val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
                 val previousEth = cache[cacheKey]?.previousEthPrice
-                val ethDiff = if (previousEth != null) ethPriceValue - previousEth else null
+                val ethDiff = if (previousEth != null) {
+                    ethPriceValue - previousEth
+                } else null
                 val ethTrend = if (ethDiff != null) {
                     when {
                         ethDiff > 5.0 -> "🔺"
