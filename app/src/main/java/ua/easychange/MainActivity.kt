@@ -53,7 +53,9 @@ data class CachedRates(
     val ethPrice: Double?,
     val timestamp: Long,
     val previousRates: List<Fx>? = null,
-    val exchangers: List<KantorExchanger>? = null
+    val exchangers: List<KantorExchanger>? = null,
+    val previousBtcPrice: Double? = null,
+    val previousEthPrice: Double? = null
 )
 
 // KANTOR моделі
@@ -520,11 +522,15 @@ fun MainScreen(
                         // Завантажуємо попередні дані з SharedPreferences
                         val previousRates = loadPreviousRates(context, cacheKey)
                         
+                        // Отримуємо попередні ціни crypto з старого кешу
+                        val previousBtc = cache[cacheKey]?.btcPrice
+                        val previousEth = cache[cacheKey]?.ethPrice
+                        
                         // Зберігаємо нові дані як попередні (для наступного разу)
                         savePreviousRates(context, cacheKey, newRates)
                         
                         // Оновлюємо кеш у пам'яті
-                        cache[cacheKey] = CachedRates(newRates, newBtc, newEth, currentTime, previousRates, newExchangers)
+                        cache[cacheKey] = CachedRates(newRates, newBtc, newEth, currentTime, previousRates, newExchangers, previousBtc, previousEth)
                         
                         rates = newRates
                         btcPrice = newBtc
@@ -534,7 +540,7 @@ fun MainScreen(
                         val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
                         lastUpdate = "Оновлено ${format.format(Date())}"
                         
-                        Log.d("Cache", "Updated cache for $cacheKey with previousRates: ${previousRates?.size ?: 0}")
+                        Log.d("Cache", "Updated cache for $cacheKey with previousRates: ${previousRates?.size ?: 0}, prevBTC: $previousBtc, prevETH: $previousEth")
                     } else if (cache[cacheKey] != null) {
                         // Якщо не вдалося завантажити - використовуємо старий кеш
                         val cached = cache[cacheKey]!!
@@ -789,7 +795,12 @@ fun MainScreen(
                     val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
                     val previousRates = cache[cacheKey]?.previousRates
                     val previousValue = if (previousRates != null && amountDouble > 0) {
-                        convert(amountDouble, baseCurrency, curr.code, previousRates)
+                        if (isKantorUah) {
+                            // Для UAH використовуємо базову валюту
+                            convert(amountDouble, baseCurrency, "UAH", previousRates)
+                        } else {
+                            convert(amountDouble, baseCurrency, curr.code, previousRates)
+                        }
                     } else null
                     
                     // Обчислюємо зміну
@@ -911,22 +922,64 @@ fun MainScreen(
                                             // Стовпець 2: Калькулятор
                                             if (amountDouble > 0) {
                                                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                                                    // Купівля (банк купує валюту у вас за UAH)
-                                                    val buyCalc = amountDouble * fx.buy
-                                                    Text(
-                                                        "${String.format(Locale.US, "%.2f", buyCalc)} ₴",
-                                                        fontSize = 13.sp,
-                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.primary
-                                                    )
-                                                    // Продаж (банк продає валюту вам за UAH)
-                                                    val sellCalc = amountDouble * fx.sell
-                                                    Text(
-                                                        "${String.format(Locale.US, "%.2f", sellCalc)} ₴",
-                                                        fontSize = 13.sp,
-                                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.secondary
-                                                    )
+                                                    if (baseCurrency == "UAH") {
+                                                        // UAH → валюта (ділити на курс)
+                                                        // Ви купуєте валюту (обмінник продає) - платите по sell
+                                                        val buyCalc = amountDouble / fx.sell
+                                                        Text(
+                                                            "${String.format(Locale.US, "%.2f", buyCalc)}",
+                                                            fontSize = 13.sp,
+                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                        // Ви продаєте валюту (обмінник купує) - отримуєте по buy
+                                                        val sellCalc = amountDouble / fx.buy
+                                                        Text(
+                                                            "${String.format(Locale.US, "%.2f", sellCalc)}",
+                                                            fontSize = 13.sp,
+                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.secondary
+                                                        )
+                                                    } else if (baseCurrency == curr.code) {
+                                                        // Валюта → UAH (множити на курс)
+                                                        // Ви продаєте валюту - отримуєте по buy
+                                                        val buyCalc = amountDouble * fx.buy
+                                                        Text(
+                                                            "${String.format(Locale.US, "%.2f", buyCalc)} ₴",
+                                                            fontSize = 13.sp,
+                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                        // Ви купуєте валюту - платите по sell
+                                                        val sellCalc = amountDouble * fx.sell
+                                                        Text(
+                                                            "${String.format(Locale.US, "%.2f", sellCalc)} ₴",
+                                                            fontSize = 13.sp,
+                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.secondary
+                                                        )
+                                                    } else {
+                                                        // Валюта → валюта (через UAH)
+                                                        val baseToUah = rates.firstOrNull { it.base == baseCurrency && it.quote == "UAH" }
+                                                        if (baseToUah?.buy != null && baseToUah.sell != null) {
+                                                            // Спочатку базову → UAH (по mid), потім UAH → цільову
+                                                            val uahAmount = amountDouble * ((baseToUah.buy + baseToUah.sell) / 2.0)
+                                                            val buyCalc = uahAmount / fx.sell
+                                                            val sellCalc = uahAmount / fx.buy
+                                                            Text(
+                                                                "${String.format(Locale.US, "%.2f", buyCalc)}",
+                                                                fontSize = 13.sp,
+                                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.primary
+                                                            )
+                                                            Text(
+                                                                "${String.format(Locale.US, "%.2f", sellCalc)}",
+                                                                fontSize = 13.sp,
+                                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.secondary
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -1033,6 +1086,25 @@ fun MainScreen(
 
             // Криптовалюти BTC та ETH
             if (btcPrice != null) {
+                // Обчислюємо тренд BTC
+                val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
+                val previousBtc = cache[cacheKey]?.previousBtcPrice
+                val btcDiff = if (previousBtc != null) btcPrice - previousBtc else null
+                val btcTrend = if (btcDiff != null) {
+                    when {
+                        btcDiff > 10.0 -> "🔺"
+                        btcDiff < -10.0 -> "🔻"
+                        else -> "🔷"
+                    }
+                } else null
+                
+                val btcTrendColor = when (btcTrend) {
+                    "🔺" -> androidx.compose.ui.graphics.Color(0xFF43A047) // зелений (зросла ціна)
+                    "🔻" -> androidx.compose.ui.graphics.Color(0xFFE53935) // червоний (впала ціна)
+                    "🔷" -> androidx.compose.ui.graphics.Color(0xFF1E88E5) // синій (без змін)
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1046,22 +1118,54 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                     ) {
                         Text(
                             "₿ BTC",
                             style = MaterialTheme.typography.titleMedium
                         )
-                        Text(
-                            String.format(Locale.US, "%.2f", btcPrice) + " USD",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontSize = 16.sp
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Text(
+                                String.format(Locale.US, "%.2f", btcPrice) + " USD",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontSize = 16.sp
+                            )
+                            if (btcTrend != null) {
+                                Text(
+                                    btcTrend,
+                                    fontSize = 16.sp,
+                                    color = btcTrendColor
+                                )
+                            }
+                        }
                     }
                 }
             }
 
             if (ethPrice != null) {
+                // Обчислюємо тренд ETH
+                val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
+                val previousEth = cache[cacheKey]?.previousEthPrice
+                val ethDiff = if (previousEth != null) ethPrice - previousEth else null
+                val ethTrend = if (ethDiff != null) {
+                    when {
+                        ethDiff > 5.0 -> "🔺"
+                        ethDiff < -5.0 -> "🔻"
+                        else -> "🔷"
+                    }
+                } else null
+                
+                val ethTrendColor = when (ethTrend) {
+                    "🔺" -> androidx.compose.ui.graphics.Color(0xFF43A047) // зелений (зросла ціна)
+                    "🔻" -> androidx.compose.ui.graphics.Color(0xFFE53935) // червоний (впала ціна)
+                    "🔷" -> androidx.compose.ui.graphics.Color(0xFF1E88E5) // синій (без змін)
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1075,17 +1179,30 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                     ) {
                         Text(
                             "Ξ ETH",
                             style = MaterialTheme.typography.titleMedium
                         )
-                        Text(
-                            String.format(Locale.US, "%.2f", ethPrice) + " USD",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontSize = 16.sp
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                        ) {
+                            Text(
+                                String.format(Locale.US, "%.2f", ethPrice) + " USD",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontSize = 16.sp
+                            )
+                            if (ethTrend != null) {
+                                Text(
+                                    ethTrend,
+                                    fontSize = 16.sp,
+                                    color = ethTrendColor
+                                )
+                            }
+                        }
                     }
                 }
             }
