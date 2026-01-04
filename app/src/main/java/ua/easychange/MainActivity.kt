@@ -1085,9 +1085,7 @@ fun MainScreen(
             Spacer(Modifier.height(12.dp))
 
             // Криптовалюти BTC та ETH
-            if (btcPrice != null) {
-                val btcPriceValue: Double = btcPrice // Явний тип Double (non-null)
-                
+            btcPrice?.let { btcPriceValue ->
                 // Обчислюємо тренд BTC
                 val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
                 val previousBtc = cache[cacheKey]?.previousBtcPrice
@@ -1150,9 +1148,7 @@ fun MainScreen(
                 }
             }
 
-            if (ethPrice != null) {
-                val ethPriceValue: Double = ethPrice // Явний тип Double (non-null)
-                
+            ethPrice?.let { ethPriceValue ->
                 // Обчислюємо тренд ETH
                 val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
                 val previousEth = cache[cacheKey]?.previousEthPrice
