@@ -410,23 +410,27 @@ fun MainScreen(
         baseCurrency = currency
     }
 
-    fun refresh() {
+    fun refresh(force: Boolean = false) {
         val currentTime = System.currentTimeMillis()
         val cacheKey = if (source == "KANTOR") "$source-$kantorCity" else source
         
-        // Перевіряємо кеш у пам'яті (60 секунд)
-        cache[cacheKey]?.let { cached ->
-            if (currentTime - cached.timestamp < 60000) {
-                // Дані свіжі - беремо з кешу
-                rates = cached.rates
-                btcPrice = cached.btcPrice
-                ethPrice = cached.ethPrice
-                exchangers = cached.exchangers ?: emptyList()
-                val seconds = ((currentTime - cached.timestamp) / 1000).toInt()
-                lastUpdate = "Кеш (${seconds}с тому)"
-                Log.d("EasyChange", "Using memory cache for $cacheKey (${seconds}s old)")
-                return
+        // Перевіряємо кеш у пам'яті (60 секунд), якщо НЕ force
+        if (!force) {
+            cache[cacheKey]?.let { cached ->
+                if (currentTime - cached.timestamp < 60000) {
+                    // Дані свіжі - беремо з кешу
+                    rates = cached.rates
+                    btcPrice = cached.btcPrice
+                    ethPrice = cached.ethPrice
+                    exchangers = cached.exchangers ?: emptyList()
+                    val seconds = ((currentTime - cached.timestamp) / 1000).toInt()
+                    lastUpdate = "Кеш (${seconds}с тому)"
+                    Log.d("EasyChange", "Using memory cache for $cacheKey (${seconds}s old)")
+                    return
+                }
             }
+        } else {
+            Log.d("EasyChange", "Force refresh for $cacheKey - ignoring cache")
         }
         
         scope.launch {
@@ -540,7 +544,11 @@ fun MainScreen(
                         val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
                         lastUpdate = "Оновлено ${format.format(Date())}"
                         
-                        Log.d("Cache", "Updated cache for $cacheKey with previousRates: ${previousRates?.size ?: 0}, prevBTC: $previousBtc, prevETH: $previousEth")
+                        Log.d("Cache", "Updated cache for $cacheKey: ${newRates.size} rates, ${newExchangers.size} exchangers")
+                        Log.d("Cache", "previousRates: ${previousRates?.size ?: 0}, prevBTC: $previousBtc, prevETH: $previousEth")
+                        newRates.take(3).forEach { 
+                            Log.d("Cache", "Rate: ${it.base}/${it.quote} = buy:${it.buy}, sell:${it.sell}, mid:${it.mid}")
+                        }
                     } else if (cache[cacheKey] != null) {
                         // Якщо не вдалося завантажити - використовуємо старий кеш
                         val cached = cache[cacheKey]!!
@@ -738,7 +746,7 @@ fun MainScreen(
                 )
                 
                 Button(
-                    onClick = { refresh() },
+                    onClick = { refresh(force = true) },
                     modifier = Modifier.height(56.dp),
                     enabled = !isLoading,
                     contentPadding = PaddingValues(horizontal = 16.dp)
