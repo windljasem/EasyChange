@@ -204,11 +204,14 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             val client = OkHttpClient()
             
             // Завантажуємо середні курси
+            // Додаємо timestamp для обходу серверного кешу
+            val timestamp = System.currentTimeMillis()
             val avgRequest = Request.Builder()
-                .url("https://kurstoday.com.ua/api/average/$city")
+                .url("https://kurstoday.com.ua/api/average/$city?_t=$timestamp")
+                .addHeader("Cache-Control", "no-cache")
                 .build()
             
-            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/api/average/$city")
+            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/api/average/$city?_t=$timestamp")
             val avgResponse = client.newCall(avgRequest).execute()
             Log.d("KANTOR", "Average API response code: ${avgResponse.code()}")
             
