@@ -228,110 +228,51 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             
             Log.d("KANTOR", "HTML loaded, size: ${html.length} chars")
             
-            // Шукаємо секцію "Курс валют в обмінниках"
-            val exchangeSection = html.indexOf("обмінниках", ignoreCase = true)
-            Log.d("KANTOR", "Exchange section found at position: $exchangeSection")
-            
-            // Якщо знайшли секцію обмінників, беремо HTML після неї
-            val relevantHtml = if (exchangeSection > 0) {
-                val startPos = maxOf(0, exchangeSection - 200) // Трохи раніше для контексту
-                html.substring(startPos, minOf(html.length, exchangeSection + 3000))
-            } else {
-                Log.w("KANTOR", "Section 'обмінниках' not found, using full HTML")
-                html
-            }
-            
-            Log.d("KANTOR", "Relevant HTML snippet (${relevantHtml.length} chars):")
-            Log.d("KANTOR", relevantHtml.take(1500))
-            
-            // Парсимо HTML таблицю "Курс валют в обмінниках"
+            // Парсимо HTML - шукаємо ВСІ таблиці з валютами
             val rates = mutableListOf<Fx>()
             
-            // Шукаємо таблицю ТІЛЬКИ в секції обмінників
-            // Паттерн 1: <td>USD</td><td>42.31</td><td>42.69</td>
-            val pattern1 = """<td[^>]*>\s*([A-Z]{3})\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>""".toRegex()
+            // Паттерн: USD + два числа поруч (42.31 та 42.69)
+            val pattern = """(USD|EUR|PLN|GBP)[^0-9]+([\d.]+)[^0-9]+([\d.]+)""".toRegex()
             
-            Log.d("KANTOR", "Trying pattern 1: TD tags in exchange section")
-            val matches = pattern1.findAll(relevantHtml)
-            var foundCount = 0
+            val allMatches = pattern.findAll(html).toList()
+            Log.d("KANTOR", "Found ${allMatches.size} currency patterns in HTML")
             
-            matches.forEach { match ->
-                val code = match.groupValues[1].trim()
-                val buyStr = match.groupValues[2].trim()
-                val sellStr = match.groupValues[3].trim()
+            // Групуємо по валюті - беремо ДРУГУ групу (обмінники, не банки)
+            val currencyGroups = allMatches.groupBy { it.groupValues[1] }
+            
+            currencyGroups.forEach { (code, matches) ->
+                Log.d("KANTOR", "$code: found ${matches.size} occurrences")
                 
-                Log.d("KANTOR", "Pattern1 match: $code | $buyStr | $sellStr")
+                // Беремо другу групу (індекс 1) якщо є, інакше першу
+                val match = if (matches.size > 1) matches[1] else matches.firstOrNull()
                 
-                if (CURRENCIES.any { it.code == code }) {
-                    val buy = buyStr.toDoubleOrNull()
-                    val sell = sellStr.toDoubleOrNull()
-                    
-                    if (buy != null && sell != null && buy > 0 && sell > 0) {
-                        val mid = (buy + sell) / 2.0
-                        rates.add(Fx(code, "UAH", buy, sell, mid))
-                        foundCount++
-                        Log.d("KANTOR", "✓ Parsed rate: $code = buy:$buy / sell:$sell / mid:$mid")
-                    }
-                }
-            }
-            
-            Log.d("KANTOR", "Pattern 1 found: $foundCount rates")
-            
-            // Паттерн 2: Числа після назви валюти (в секції обмінників)
-            if (rates.isEmpty()) {
-                Log.w("KANTOR", "Trying pattern 2: currency code followed by numbers")
-                val pattern2 = """([A-Z]{3})\D+([\d.]+)\D+([\d.]+)""".toRegex()
-                val matches2 = pattern2.findAll(relevantHtml)
-                
-                matches2.forEach { match ->
-                    val code = match.groupValues[1].trim()
-                    val num1 = match.groupValues[2].trim()
-                    val num2 = match.groupValues[3].trim()
-                    
-                    Log.d("KANTOR", "Pattern2 match: $code | $num1 | $num2")
-                    
-                    if (CURRENCIES.any { it.code == code }) {
-                        val val1 = num1.toDoubleOrNull()
-                        val val2 = num2.toDoubleOrNull()
-                        
-                        if (val1 != null && val2 != null && val1 > 10 && val2 > 10 && val1 < 100 && val2 < 100) {
-                            val buy = minOf(val1, val2)
-                            val sell = maxOf(val1, val2)
-                            val mid = (buy + sell) / 2.0
-                            rates.add(Fx(code, "UAH", buy, sell, mid))
-                            Log.d("KANTOR", "✓ Parsed (p2): $code = buy:$buy / sell:$sell / mid:$mid")
-                        }
-                    }
-                }
-            }
-            
-            // Паттерн 3: з класами (в секції обмінників)
-            if (rates.isEmpty()) {
-                Log.w("KANTOR", "Trying pattern 3: with CSS classes")
-                val pattern3 = """class="[^"]*currency[^"]*"[^>]*>([A-Z]{3})[^<]*</[^>]*>\s*<[^>]*class="[^"]*buy[^"]*"[^>]*>([\d.]+)[^<]*</[^>]*>\s*<[^>]*class="[^"]*sell[^"]*"[^>]*>([\d.]+)""".toRegex()
-                val matches3 = pattern3.findAll(relevantHtml)
-                
-                matches3.forEach { match ->
-                    val code = match.groupValues[1].trim()
+                if (match != null) {
                     val buyStr = match.groupValues[2].trim()
                     val sellStr = match.groupValues[3].trim()
                     
-                    Log.d("KANTOR", "Pattern3 match: $code | $buyStr | $sellStr")
+                    Log.d("KANTOR", "$code: trying buy=$buyStr, sell=$sellStr")
                     
-                    if (CURRENCIES.any { it.code == code }) {
-                        val buy = buyStr.toDoubleOrNull()
-                        val sell = sellStr.toDoubleOrNull()
-                        
-                        if (buy != null && sell != null && buy > 0 && sell > 0) {
-                            val mid = (buy + sell) / 2.0
-                            rates.add(Fx(code, "UAH", buy, sell, mid))
-                            Log.d("KANTOR", "✓ Parsed (p3): $code = buy:$buy / sell:$sell / mid:$mid")
-                        }
+                    val buy = buyStr.toDoubleOrNull()
+                    val sell = sellStr.toDoubleOrNull()
+                    
+                    // Перевіряємо що це схоже на курс валют (10-100 для USD/EUR/GBP/PLN)
+                    if (buy != null && sell != null && buy > 10 && sell > 10 && buy < 100 && sell < 100) {
+                        val mid = (buy + sell) / 2.0
+                        rates.add(Fx(code, "UAH", buy, sell, mid))
+                        Log.d("KANTOR", "✓ Parsed $code: buy=$buy, sell=$sell, mid=$mid")
+                    } else {
+                        Log.w("KANTOR", "✗ Skipped $code: invalid values buy=$buy, sell=$sell")
                     }
                 }
             }
             
             val exchangers = emptyList<KantorExchanger>()
+            
+            // Якщо нічого не знайшли - логуємо
+            if (rates.isEmpty()) {
+                Log.e("KANTOR", "FAILED to parse any rates from HTML!")
+                Log.e("KANTOR", "HTML size: ${html.length} chars")
+            }
             
             Log.d("KANTOR", "=== Parse complete ===")
             Log.d("KANTOR", "Total: ${rates.size} rates from HTML")
