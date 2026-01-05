@@ -237,6 +237,14 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             val allMatches = pattern.findAll(html).toList()
             Log.d("KANTOR", "Found ${allMatches.size} currency patterns in HTML")
             
+            // Логуємо ВСІ знайдені входження
+            allMatches.forEachIndexed { index, match ->
+                val code = match.groupValues[1]
+                val val1 = match.groupValues[2]
+                val val2 = match.groupValues[3]
+                Log.d("KANTOR", "Match[$index]: $code $val1 $val2")
+            }
+            
             // Групуємо по валюті - беремо ДРУГУ групу (обмінники, не банки)
             val currencyGroups = allMatches.groupBy { it.groupValues[1] }
             
