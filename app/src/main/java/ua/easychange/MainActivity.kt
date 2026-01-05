@@ -228,26 +228,31 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             
             Log.d("KANTOR", "HTML loaded, size: ${html.length} chars")
             
-            // Зберігаємо частину HTML в лог для аналізу
-            val snippet = html.substring(0, minOf(3000, html.length))
-            Log.d("KANTOR", "HTML snippet (first 3000 chars):")
-            Log.d("KANTOR", snippet)
+            // Шукаємо секцію "Курс валют в обмінниках"
+            val exchangeSection = html.indexOf("обмінниках", ignoreCase = true)
+            Log.d("KANTOR", "Exchange section found at position: $exchangeSection")
             
-            // Шукаємо ключові слова для локалізації таблиці
-            val hasExchangeTable = html.contains("обмінник", ignoreCase = true) || 
-                                   html.contains("Курс валют", ignoreCase = true) ||
-                                   html.contains("USD", ignoreCase = false)
-            Log.d("KANTOR", "Has exchange table indicators: $hasExchangeTable")
+            // Якщо знайшли секцію обмінників, беремо HTML після неї
+            val relevantHtml = if (exchangeSection > 0) {
+                val startPos = maxOf(0, exchangeSection - 200) // Трохи раніше для контексту
+                html.substring(startPos, minOf(html.length, exchangeSection + 3000))
+            } else {
+                Log.w("KANTOR", "Section 'обмінниках' not found, using full HTML")
+                html
+            }
+            
+            Log.d("KANTOR", "Relevant HTML snippet (${relevantHtml.length} chars):")
+            Log.d("KANTOR", relevantHtml.take(1500))
             
             // Парсимо HTML таблицю "Курс валют в обмінниках"
             val rates = mutableListOf<Fx>()
             
-            // Шукаємо таблицю з класом або текстом "Курс валют в обмінниках"
-            // Паттерн 1: <td>USD</td><td>42.34</td><td>42.62</td>
+            // Шукаємо таблицю ТІЛЬКИ в секції обмінників
+            // Паттерн 1: <td>USD</td><td>42.31</td><td>42.69</td>
             val pattern1 = """<td[^>]*>\s*([A-Z]{3})\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>""".toRegex()
             
-            Log.d("KANTOR", "Trying pattern 1: TD tags")
-            val matches = pattern1.findAll(html)
+            Log.d("KANTOR", "Trying pattern 1: TD tags in exchange section")
+            val matches = pattern1.findAll(relevantHtml)
             var foundCount = 0
             
             matches.forEach { match ->
@@ -272,11 +277,11 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             
             Log.d("KANTOR", "Pattern 1 found: $foundCount rates")
             
-            // Паттерн 2: Числа після назви валюти
+            // Паттерн 2: Числа після назви валюти (в секції обмінників)
             if (rates.isEmpty()) {
                 Log.w("KANTOR", "Trying pattern 2: currency code followed by numbers")
                 val pattern2 = """([A-Z]{3})\D+([\d.]+)\D+([\d.]+)""".toRegex()
-                val matches2 = pattern2.findAll(html)
+                val matches2 = pattern2.findAll(relevantHtml)
                 
                 matches2.forEach { match ->
                     val code = match.groupValues[1].trim()
@@ -300,11 +305,11 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                 }
             }
             
-            // Паттерн 3: з класами
+            // Паттерн 3: з класами (в секції обмінників)
             if (rates.isEmpty()) {
                 Log.w("KANTOR", "Trying pattern 3: with CSS classes")
                 val pattern3 = """class="[^"]*currency[^"]*"[^>]*>([A-Z]{3})[^<]*</[^>]*>\s*<[^>]*class="[^"]*buy[^"]*"[^>]*>([\d.]+)[^<]*</[^>]*>\s*<[^>]*class="[^"]*sell[^"]*"[^>]*>([\d.]+)""".toRegex()
-                val matches3 = pattern3.findAll(html)
+                val matches3 = pattern3.findAll(relevantHtml)
                 
                 matches3.forEach { match ->
                     val code = match.groupValues[1].trim()
