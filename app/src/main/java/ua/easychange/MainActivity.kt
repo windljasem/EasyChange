@@ -200,101 +200,100 @@ data class KantorCurrencyRate(
 suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>> {
     return withContext(Dispatchers.IO) {
         try {
-            Log.d("KANTOR", "=== Fetching JSON API for city: $city ===")
+            Log.d("KANTOR", "=== Fetching data from kurstoday.com.ua homepage ===")
             val client = OkHttpClient()
             
-            // Завантажуємо середні курси
-            // Додаємо timestamp для обходу серверного кешу
+            // Завантажуємо головну сторінку
             val timestamp = System.currentTimeMillis()
-            val avgRequest = Request.Builder()
-                .url("https://kurstoday.com.ua/api/average/$city?_t=$timestamp")
+            val htmlRequest = Request.Builder()
+                .url("https://kurstoday.com.ua/?_t=$timestamp")
                 .addHeader("Cache-Control", "no-cache")
+                .addHeader("User-Agent", "Mozilla/5.0 (Android)")
                 .build()
             
-            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/api/average/$city?_t=$timestamp")
-            val avgResponse = client.newCall(avgRequest).execute()
-            Log.d("KANTOR", "Average API response code: ${avgResponse.code()}")
+            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/?_t=$timestamp")
+            val htmlResponse = client.newCall(htmlRequest).execute()
+            Log.d("KANTOR", "HTML response code: ${htmlResponse.code()}")
             
-            if (!avgResponse.isSuccessful) {
-                Log.e("KANTOR", "Average API error: ${avgResponse.code()}")
+            if (!htmlResponse.isSuccessful) {
+                Log.e("KANTOR", "HTML fetch error: ${htmlResponse.code()}")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            val avgJson = avgResponse.body()?.string()
-            if (avgJson == null) {
-                Log.e("KANTOR", "Average API response body is null")
+            val html = htmlResponse.body()?.string()
+            if (html == null) {
+                Log.e("KANTOR", "HTML response body is null")
                 return@withContext Pair(emptyList(), emptyList())
             }
             
-            Log.d("KANTOR", "Average API response: ${avgJson.take(500)}")
+            Log.d("KANTOR", "HTML loaded, size: ${html.length} chars")
             
-            // Парсимо JSON
-            val gson = com.google.gson.Gson()
-            val avgData = try {
-                val parsed = gson.fromJson(avgJson, KantorAverageResponse::class.java)
-                Log.d("KANTOR", "JSON parsed successfully")
-                parsed
-            } catch (e: Exception) {
-                Log.e("KANTOR", "JSON parse error: ${e.message}")
-                Log.e("KANTOR", "JSON content was: $avgJson")
-                return@withContext Pair(emptyList(), emptyList())
-            }
+            // Парсимо HTML таблицю "Курс валют в обмінниках"
+            val rates = mutableListOf<Fx>()
             
-            // Конвертуємо в Fx
-            val avgRates = mutableListOf<Fx>()
+            // Шукаємо таблицю з класом або текстом "Курс валют в обмінниках"
+            // Паттерн 1: <td>USD</td><td>42.34</td><td>42.62</td>
+            val pattern1 = """<td[^>]*>\s*([A-Z]{3})\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>""".toRegex()
             
-            // Мапа валют з відповіді
-            val currencyMap = mapOf(
-                "USD" to avgData.usd,
-                "EUR" to avgData.eur,
-                "PLN" to avgData.pln,
-                "GBP" to avgData.gbp
-            )
+            val matches = pattern1.findAll(html)
+            var foundCount = 0
             
-            currencyMap.forEach { (code, rate) ->
-                if (rate != null && CURRENCIES.any { it.code == code }) {
-                    // API повертає "—" для відсутніх курсів
-                    val buyDouble = if (rate.buy == "—" || rate.buy == "тАФ") null else rate.buy.toDoubleOrNull()
-                    val sellDouble = if (rate.sel == "—" || rate.sel == "тАФ") null else rate.sel.toDoubleOrNull()
+            matches.forEach { match ->
+                val code = match.groupValues[1].trim()
+                val buyStr = match.groupValues[2].trim()
+                val sellStr = match.groupValues[3].trim()
+                
+                if (CURRENCIES.any { it.code == code }) {
+                    val buy = buyStr.toDoubleOrNull()
+                    val sell = sellStr.toDoubleOrNull()
                     
-                    if (buyDouble != null && sellDouble != null) {
-                        val mid = (buyDouble + sellDouble) / 2.0
-                        avgRates.add(Fx(code, "UAH", buyDouble, sellDouble, mid))
-                        Log.d("KANTOR", "✓ Average rate: $code = buy:$buyDouble / sell:$sellDouble / mid:$mid")
-                    } else {
-                        Log.d("KANTOR", "✗ Skipped $code: buy=${rate.buy}, sel=${rate.sel}")
+                    if (buy != null && sell != null && buy > 0 && sell > 0) {
+                        val mid = (buy + sell) / 2.0
+                        rates.add(Fx(code, "UAH", buy, sell, mid))
+                        foundCount++
+                        Log.d("KANTOR", "✓ Parsed rate: $code = buy:$buy / sell:$sell / mid:$mid")
                     }
                 }
             }
             
-            // TODO: Завантаження детальних курсів обмінників (поки відкладено)
-            val exchangers = mutableListOf<KantorExchanger>()
-            /*
-            val serviceRequest = Request.Builder()
-                .url("https://kurstoday.com.ua/api/service/$city")
-                .build()
+            Log.d("KANTOR", "Pattern 1 found: $foundCount rates")
             
-            Log.d("KANTOR", "Requesting: https://kurstoday.com.ua/api/service/$city")
-            val serviceResponse = client.newCall(serviceRequest).execute()
-            Log.d("KANTOR", "Service API response code: ${serviceResponse.code()}")
-            
-            if (serviceResponse.isSuccessful) {
-                val serviceJson = serviceResponse.body()?.string()
-                if (serviceJson != null) {
-                    Log.d("KANTOR", "Service API response: ${serviceJson.take(500)}")
-                    // TODO: Парсинг service API
+            // Якщо не знайшли, пробуємо альтернативний паттерн
+            if (rates.isEmpty()) {
+                Log.w("KANTOR", "Trying alternative pattern...")
+                
+                // Паттерн 2: з класами
+                val pattern2 = """<div[^>]*class="currency"[^>]*>([A-Z]{3})</div>\s*<div[^>]*class="buy"[^>]*>([\d.]+)</div>\s*<div[^>]*class="sell"[^>]*>([\d.]+)</div>""".toRegex()
+                val matches2 = pattern2.findAll(html)
+                
+                matches2.forEach { match ->
+                    val code = match.groupValues[1].trim()
+                    val buyStr = match.groupValues[2].trim()
+                    val sellStr = match.groupValues[3].trim()
+                    
+                    if (CURRENCIES.any { it.code == code }) {
+                        val buy = buyStr.toDoubleOrNull()
+                        val sell = sellStr.toDoubleOrNull()
+                        
+                        if (buy != null && sell != null && buy > 0 && sell > 0) {
+                            val mid = (buy + sell) / 2.0
+                            rates.add(Fx(code, "UAH", buy, sell, mid))
+                            Log.d("KANTOR", "✓ Parsed (alt): $code = buy:$buy / sell:$sell / mid:$mid")
+                        }
+                    }
                 }
             }
-            */
+            
+            val exchangers = emptyList<KantorExchanger>()
             
             Log.d("KANTOR", "=== Parse complete ===")
-            Log.d("KANTOR", "Total: ${avgRates.size} avg rates, ${exchangers.size} exchangers")
+            Log.d("KANTOR", "Total: ${rates.size} rates from HTML")
             Log.d("KANTOR", "Timestamp: ${System.currentTimeMillis()}")
-            avgRates.forEach {
+            rates.forEach {
                 Log.d("KANTOR", "Final rate: ${it.base}/${it.quote} buy=${it.buy} sell=${it.sell}")
             }
             
-            Pair(avgRates, exchangers)
+            Pair(rates, exchangers)
             
         } catch (e: Exception) {
             Log.e("KANTOR", "Error loading KANTOR: ${e.message}", e)
@@ -670,21 +669,6 @@ fun MainScreen(
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                             Text("KANTOR", fontSize = 13.sp)
                             Text("kurstoday.com.ua", fontSize = 8.sp)
-                        }
-                    }
-                    
-                    if (source == "KANTOR") {
-                        Button(
-                            onClick = { showCityPicker = true },
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary
-                            )
-                        ) {
-                            Text(
-                                KANTOR_CITIES.find { it.first == kantorCity }?.second ?: kantorCity,
-                                fontSize = 11.sp
-                            )
                         }
                     }
                 }
@@ -1272,37 +1256,6 @@ fun MainScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showCurrencyPicker = false }) {
-                    Text("Закрити")
-                }
-            }
-        )
-    }
-
-    // Діалог вибору міста для KANTOR
-    if (showCityPicker) {
-        AlertDialog(
-            onDismissRequest = { showCityPicker = false },
-            title = { Text("Оберіть місто") },
-            text = {
-                Column {
-                    KANTOR_CITIES.forEach { (cityCode, cityName) ->
-                        TextButton(
-                            onClick = {
-                                kantorCity = cityCode
-                                showCityPicker = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                cityName,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCityPicker = false }) {
                     Text("Закрити")
                 }
             }
