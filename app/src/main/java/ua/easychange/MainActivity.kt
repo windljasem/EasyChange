@@ -286,6 +286,10 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             
             Log.d("KANTOR", "=== Parse complete ===")
             Log.d("KANTOR", "Total: ${avgRates.size} avg rates, ${exchangers.size} exchangers")
+            Log.d("KANTOR", "Timestamp: ${System.currentTimeMillis()}")
+            avgRates.forEach {
+                Log.d("KANTOR", "Final rate: ${it.base}/${it.quote} buy=${it.buy} sell=${it.sell}")
+            }
             
             Pair(avgRates, exchangers)
             
@@ -483,7 +487,18 @@ fun MainScreen(
 
                         "KANTOR" -> {
                             try {
+                                Log.d("KANTOR", "=== Calling fetchKantorData for city: $kantorCity ===")
                                 val (avgRates, exch) = fetchKantorData(kantorCity)
+                                Log.d("KANTOR", "fetchKantorData returned: ${avgRates.size} rates, ${exch.size} exchangers")
+                                
+                                if (avgRates.isNotEmpty()) {
+                                    avgRates.forEach { rate ->
+                                        Log.d("KANTOR", "Received rate: ${rate.base}/${rate.quote} buy=${rate.buy} sell=${rate.sell} mid=${rate.mid}")
+                                    }
+                                } else {
+                                    Log.w("KANTOR", "fetchKantorData returned EMPTY list!")
+                                }
+                                
                                 newRates = avgRates
                                 newExchangers = exch
                             } catch (e: Exception) {
@@ -540,6 +555,12 @@ fun MainScreen(
                         btcPrice = newBtc
                         ethPrice = newEth
                         exchangers = newExchangers
+                        
+                        Log.d("UI", "=== UI updated for $cacheKey ===")
+                        Log.d("UI", "rates.size = ${rates.size}")
+                        rates.take(3).forEach {
+                            Log.d("UI", "UI rate: ${it.base}/${it.quote} buy=${it.buy} sell=${it.sell}")
+                        }
                         
                         val format = SimpleDateFormat("dd.MM.yyyy 'о' HH:mm", Locale("uk"))
                         lastUpdate = "Оновлено ${format.format(Date())}"
