@@ -245,8 +245,23 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                 Log.d("KANTOR", "Match[$index]: $code $val1 $val2")
             }
             
+            // ФІЛЬТРУЄМО: залишаємо тільки валідні значення (10-100)
+            val validMatches = allMatches.filter { match ->
+                val val1 = match.groupValues[2].toDoubleOrNull()
+                val val2 = match.groupValues[3].toDoubleOrNull()
+                val1 != null && val2 != null && val1 > 10 && val2 > 10 && val1 < 100 && val2 < 100
+            }
+            
+            Log.d("KANTOR", "Valid matches after filter: ${validMatches.size}")
+            validMatches.forEachIndexed { index, match ->
+                val code = match.groupValues[1]
+                val val1 = match.groupValues[2]
+                val val2 = match.groupValues[3]
+                Log.d("KANTOR", "Valid[$index]: $code $val1 $val2")
+            }
+            
             // Групуємо по валюті - беремо ДРУГУ групу (обмінники, не банки)
-            val currencyGroups = allMatches.groupBy { it.groupValues[1] }
+            val currencyGroups = validMatches.groupBy { it.groupValues[1] }
             
             currencyGroups.forEach { (code, matches) ->
                 Log.d("KANTOR", "$code: found ${matches.size} occurrences")
@@ -258,18 +273,15 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                     val buyStr = match.groupValues[2].trim()
                     val sellStr = match.groupValues[3].trim()
                     
-                    Log.d("KANTOR", "$code: trying buy=$buyStr, sell=$sellStr")
+                    Log.d("KANTOR", "$code: using buy=$buyStr, sell=$sellStr")
                     
                     val buy = buyStr.toDoubleOrNull()
                     val sell = sellStr.toDoubleOrNull()
                     
-                    // Перевіряємо що це схоже на курс валют (10-100 для USD/EUR/GBP/PLN)
-                    if (buy != null && sell != null && buy > 10 && sell > 10 && buy < 100 && sell < 100) {
+                    if (buy != null && sell != null) {
                         val mid = (buy + sell) / 2.0
                         rates.add(Fx(code, "UAH", buy, sell, mid))
                         Log.d("KANTOR", "✓ Parsed $code: buy=$buy, sell=$sell, mid=$mid")
-                    } else {
-                        Log.w("KANTOR", "✗ Skipped $code: invalid values buy=$buy, sell=$sell")
                     }
                 }
             }
