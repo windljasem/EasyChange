@@ -878,7 +878,7 @@ fun MainScreen(
                                         val baseFx = rates.firstOrNull { it.base == baseCurrency && it.quote == "UAH" }
                                         if (baseFx?.buy != null && baseFx.sell != null && amountDouble > 0) {
                                             Row(
-                                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                                                 verticalAlignment = androidx.compose.ui.Alignment.Top
                                             ) {
                                                 // Стовпець 1: Курси
@@ -895,7 +895,7 @@ fun MainScreen(
                                                     )
                                                 }
                                                 
-                                                // Стовпець 2: Калькулятор (скільки UAH за вказану суму валюти)
+                                                // Стовпець 2: Калькулятор
                                                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                                                     val buyCalc = amountDouble * baseFx.buy
                                                     Text(
@@ -912,6 +912,29 @@ fun MainScreen(
                                                         color = MaterialTheme.colorScheme.secondary
                                                     )
                                                 }
+                                                
+                                                // Стовпець 3: Тренд
+                                                Column(
+                                                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                                                    modifier = Modifier.width(50.dp)
+                                                ) {
+                                                    if (trend != null) {
+                                                        Text(
+                                                            trend,
+                                                            fontSize = 16.sp,
+                                                            color = trendColor
+                                                        )
+                                                        // Показуємо зміну
+                                                        if (diff != null) {
+                                                            val sign = if (diff > 0) "+" else ""
+                                                            Text(
+                                                                "$sign${String.format(Locale.US, "%.2f", diff)}",
+                                                                fontSize = 9.sp,
+                                                                color = trendColor
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
                                         } else {
                                             Text(
@@ -926,7 +949,7 @@ fun MainScreen(
                                         val fx = rates.firstOrNull { it.base == curr.code && it.quote == "UAH" }
                                         if (fx?.buy != null && fx.sell != null) {
                                         Row(
-                                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                                             verticalAlignment = androidx.compose.ui.Alignment.Top
                                         ) {
                                             // Стовпець 1: Курси (К/П)
@@ -1006,26 +1029,38 @@ fun MainScreen(
                                                     }
                                                 }
                                             }
+                                            
+                                            // Стовпець 3: Тренд
+                                            Column(
+                                                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                                                modifier = Modifier.width(50.dp)
+                                            ) {
+                                                if (trend != null) {
+                                                    Text(
+                                                        trend,
+                                                        fontSize = 16.sp,
+                                                        color = trendColor
+                                                    )
+                                                    // Показуємо зміну
+                                                    if (diff != null) {
+                                                        val sign = if (diff > 0) "+" else ""
+                                                        Text(
+                                                            "$sign${String.format(Locale.US, "%.2f", diff)}",
+                                                            fontSize = 9.sp,
+                                                            color = trendColor
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
-                                        
-                                        // Тренд (якщо є)
-                                        if (trend != null) {
-                                            Spacer(Modifier.width(6.dp))
+                                        } else {
                                             Text(
-                                                trend,
-                                                fontSize = 16.sp,
-                                                color = trendColor,
-                                                modifier = Modifier.alignByBaseline()
+                                                "НЕ ВИЗНАЧЕНО",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 12.sp
                                             )
                                         }
-                                    } else {
-                                        Text(
-                                            "НЕ ВИЗНАЧЕНО",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 12.sp
-                                        )
-                                    }
                                     }  // Закриваємо else для не-UAH валют
                                 } else {
                                     // Для NBU/NBP - як раніше
