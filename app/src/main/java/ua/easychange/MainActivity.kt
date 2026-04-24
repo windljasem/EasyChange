@@ -115,7 +115,8 @@ val CURRENCIES = listOf(
     CurrencyInfo("USD", "🇺🇸", "Долар США"),
     CurrencyInfo("EUR", "🇪🇺", "Євро"),
     CurrencyInfo("PLN", "🇵🇱", "Злотий"),
-    CurrencyInfo("GBP", "🇬🇧", "Фунт")
+    CurrencyInfo("GBP", "🇬🇧", "Фунт"),
+    CurrencyInfo("ALL", "🇦🇱", "Лек")  // Албанський лек - відображається якщо є в джерелі
 )
 
 val KANTOR_CITIES = listOf(
@@ -232,7 +233,7 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             val rates = mutableListOf<Fx>()
             
             // Паттерн: USD + два числа поруч (42.31 та 42.69)
-            val pattern = """(USD|EUR|PLN|GBP)[^0-9]+([\d.]+)[^0-9]+([\d.]+)""".toRegex()
+            val pattern = """(USD|EUR|PLN|GBP|ALL)[^0-9]+([\d.]+)[^0-9]+([\d.]+)""".toRegex()
             
             val allMatches = pattern.findAll(html).toList()
             Log.d("KANTOR", "Found ${allMatches.size} currency patterns in HTML")
@@ -245,11 +246,12 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
                 Log.d("KANTOR", "Match[$index]: $code $val1 $val2")
             }
             
-            // ФІЛЬТРУЄМО: залишаємо тільки валідні значення (10-100)
+            // ФІЛЬТРУЄМО: залишаємо тільки валідні значення (1-100)
+            // ALL (лек) ~ 4-5, USD ~ 42, EUR ~ 50, PLN ~ 12, GBP ~ 56
             val validMatches = allMatches.filter { match ->
                 val val1 = match.groupValues[2].toDoubleOrNull()
                 val val2 = match.groupValues[3].toDoubleOrNull()
-                val1 != null && val2 != null && val1 > 10 && val2 > 10 && val1 < 100 && val2 < 100
+                val1 != null && val2 != null && val1 > 1 && val2 > 1 && val1 < 100 && val2 < 100
             }
             
             Log.d("KANTOR", "Valid matches after filter: ${validMatches.size}")
