@@ -484,10 +484,10 @@ fun MainScreen(
                                 // Запит 1: USD → UAH
                                 try {
                                     val uahResponse = hexarate.getRate("USD", "UAH")
-                                    Log.d("EasyChange", "Hexarate USD→UAH: ${uahResponse.data.mid}")
-                                    rates.add(Fx("UAH", "USD", null, null, uahResponse.data.mid))
-                                    // Обернена пара
-                                    rates.add(Fx("USD", "UAH", null, null, 1.0 / uahResponse.data.mid))
+                                    Log.d("EasyChange", "Hexarate: 1 USD = ${uahResponse.data.mid} UAH")
+                                    rates.add(Fx("USD", "UAH", null, null, uahResponse.data.mid))
+                                    // Обернена пара: 1 UAH = 1/mid USD
+                                    rates.add(Fx("UAH", "USD", null, null, 1.0 / uahResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→UAH failed: ${e.message}")
                                 }
@@ -495,10 +495,10 @@ fun MainScreen(
                                 // Запит 2: USD → EUR
                                 try {
                                     val eurResponse = hexarate.getRate("USD", "EUR")
-                                    Log.d("EasyChange", "Hexarate USD→EUR: ${eurResponse.data.mid}")
-                                    rates.add(Fx("EUR", "USD", null, null, eurResponse.data.mid))
-                                    // Обернена пара
-                                    rates.add(Fx("USD", "EUR", null, null, 1.0 / eurResponse.data.mid))
+                                    Log.d("EasyChange", "Hexarate: 1 USD = ${eurResponse.data.mid} EUR")
+                                    rates.add(Fx("USD", "EUR", null, null, eurResponse.data.mid))
+                                    // Обернена пара: 1 EUR = 1/mid USD
+                                    rates.add(Fx("EUR", "USD", null, null, 1.0 / eurResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→EUR failed: ${e.message}")
                                 }
@@ -506,10 +506,10 @@ fun MainScreen(
                                 // Запит 3: USD → PLN
                                 try {
                                     val plnResponse = hexarate.getRate("USD", "PLN")
-                                    Log.d("EasyChange", "Hexarate USD→PLN: ${plnResponse.data.mid}")
-                                    rates.add(Fx("PLN", "USD", null, null, plnResponse.data.mid))
-                                    // Обернена пара
-                                    rates.add(Fx("USD", "PLN", null, null, 1.0 / plnResponse.data.mid))
+                                    Log.d("EasyChange", "Hexarate: 1 USD = ${plnResponse.data.mid} PLN")
+                                    rates.add(Fx("USD", "PLN", null, null, plnResponse.data.mid))
+                                    // Обернена пара: 1 PLN = 1/mid USD
+                                    rates.add(Fx("PLN", "USD", null, null, 1.0 / plnResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→PLN failed: ${e.message}")
                                 }
@@ -517,17 +517,17 @@ fun MainScreen(
                                 // Запит 4: USD → ALL
                                 try {
                                     val allResponse = hexarate.getRate("USD", "ALL")
-                                    Log.d("EasyChange", "Hexarate USD→ALL: ${allResponse.data.mid}")
-                                    rates.add(Fx("ALL", "USD", null, null, allResponse.data.mid))
-                                    // Обернена пара
-                                    rates.add(Fx("USD", "ALL", null, null, 1.0 / allResponse.data.mid))
+                                    Log.d("EasyChange", "Hexarate: 1 USD = ${allResponse.data.mid} ALL")
+                                    rates.add(Fx("USD", "ALL", null, null, allResponse.data.mid))
+                                    // Обернена пара: 1 ALL = 1/mid USD
+                                    rates.add(Fx("ALL", "USD", null, null, 1.0 / allResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→ALL failed: ${e.message}")
                                 }
                                 
                                 Log.d("EasyChange", "Hexarate total parsed: ${rates.size} rates (с обернениями)")
                                 rates.forEach { fx ->
-                                    Log.d("EasyChange", "Parsed: ${fx.base}/${fx.quote} = ${fx.mid}")
+                                    Log.d("EasyChange", "Parsed: 1 ${fx.base} = ${fx.mid} ${fx.quote}")
                                 }
                                 
                                 newRates = rates
