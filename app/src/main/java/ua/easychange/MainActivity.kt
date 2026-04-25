@@ -84,13 +84,17 @@ data class NbuDto(
     val exchangedate: String? = null
 )
 
-interface XeApi {
-    @GET("v1/currencies/")
-    suspend fun load(@Query("base") base: String = "EUR"): XeResponse
+interface OpenExchangeRatesApi {
+    @GET("latest.json")
+    suspend fun load(
+        @Query("app_id") appId: String,
+        @Query("base") base: String = "EUR",
+        @Query("symbols") symbols: String = "USD,EUR,PLN,UAH,ALL"
+    ): OpenExchangeRatesResponse
 }
 
-data class XeResponse(
-    val from: String,
+data class OpenExchangeRatesResponse(
+    val base: String,
     val rates: Map<String, Double>
 )
 
@@ -116,6 +120,8 @@ val KANTOR_CITIES = listOf(
     "odessa" to "Одеса",
     "kharkiv" to "Харків"
 )
+
+const val OPEN_EXCHANGE_RATES_APP_ID = "8c99df900a47446ebe55d44e71382f63"
 
 // ------------------ UTILITY FUNCTIONS ------------------
 fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? {
@@ -342,11 +348,11 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val xe = Retrofit.Builder()
-            .baseUrl("https://xecd.xe.com/")
+        val openExchangeRates = Retrofit.Builder()
+            .baseUrl("https://openexchangerates.org/api/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(XeApi::class.java)
+            .create(OpenExchangeRatesApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -374,7 +380,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(nbu, xe, binance)
+                    MainScreen(nbu, openExchangeRates, binance)
                 }
             }
         }
@@ -385,7 +391,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     nbu: NbuApi,
-    xe: XeApi,
+    openExchangeRates: OpenExchangeRatesApi,
     binance: BinanceApi
 ) {
     val context = LocalContext.current
@@ -468,22 +474,26 @@ fun MainScreen(
 
                         "EUR" -> {
                             try {
-                                val response = xe.load(base = "EUR")
-                                Log.d("EasyChange", "XE: ${response.rates.size} rates")
+                                val response = openExchangeRates.load(
+                                    appId = OPEN_EXCHANGE_RATES_APP_ID,
+                                    base = "EUR",
+                                    symbols = "USD,EUR,PLN,UAH,ALL"
+                                )
+                                Log.d("EasyChange", "OpenExchangeRates: ${response.rates.size} rates")
                                 response.rates.forEach { (code, rate) ->
-                                    Log.d("EasyChange", "XE rate: $code = $rate")
+                                    Log.d("EasyChange", "OER rate: $code = $rate")
                                 }
                                 
                                 newRates = response.rates.map { entry ->
                                     Fx(entry.key, "EUR", null, null, entry.value)
                                 }
-                                Log.d("EasyChange", "XE parsed: ${newRates.size} rates")
+                                Log.d("EasyChange", "OER parsed: ${newRates.size} rates")
                                 newRates.forEach { fx ->
                                     Log.d("EasyChange", "Parsed: ${fx.base}/EUR = ${fx.mid}")
                                 }
                                 newExchangers = emptyList()
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "XE error: ${e.message}", e)
+                                Log.e("EasyChange", "OpenExchangeRates error: ${e.message}", e)
                                 newRates = cache[cacheKey]?.rates ?: emptyList()
                                 newExchangers = emptyList()
                             }
@@ -612,7 +622,7 @@ fun MainScreen(
         Column(modifier = Modifier.padding(16.dp)) {
             // Кнопки джерел
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Верхній ряд - NBU і EUR (XE)
+                // Верхній ряд - NBU і EUR (OpenExchangeRates)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -647,7 +657,7 @@ fun MainScreen(
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                             Text("EUR", fontSize = 13.sp)
-                            Text("xe.com", fontSize = 8.sp)
+                            Text("openexchangerates.org", fontSize = 8.sp)
                         }
                     }
                 }
@@ -799,7 +809,7 @@ fun MainScreen(
                 
                 CURRENCIES.filter { curr ->
                     curr.code != baseCurrency && 
-                    // ALL показуємо тільки для XE (EUR)
+                    // ALL показуємо тільки для OpenExchangeRates (EUR)
                     (curr.code != "ALL" || source == "EUR")
                 }.forEach { curr ->
                     // Для KANTOR UAH потрібна особлива логіка
