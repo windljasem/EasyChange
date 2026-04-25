@@ -84,18 +84,27 @@ data class NbuDto(
     val exchangedate: String? = null
 )
 
-interface OpenExchangeRatesApi {
-    @GET("latest.json")
-    suspend fun load(
-        @Query("app_id") appId: String,
-        @Query("base") base: String = "EUR",
-        @Query("symbols") symbols: String = "USD,EUR,PLN,UAH,ALL"
-    ): OpenExchangeRatesResponse
+interface HexarateApi {
+    @GET("api/rates/batch")
+    suspend fun loadBatch(
+        @Query("pairs") pairs: String = "USD:UAH,USD:EUR,USD:PLN,USD:ALL"
+    ): HexarateResponse
 }
 
-data class OpenExchangeRatesResponse(
+data class HexarateResponse(
+    val status_code: Int,
+    val data: HexarateData
+)
+
+data class HexarateData(
+    val date: String,
+    val results: List<HexarateRate>
+)
+
+data class HexarateRate(
     val base: String,
-    val rates: Map<String, Double>
+    val target: String,
+    val mid: Double?
 )
 
 interface BinanceApi {
@@ -120,8 +129,6 @@ val KANTOR_CITIES = listOf(
     "odessa" to "Одеса",
     "kharkiv" to "Харків"
 )
-
-const val OPEN_EXCHANGE_RATES_APP_ID = "8c99df900a47446ebe55d44e71382f63"
 
 // ------------------ UTILITY FUNCTIONS ------------------
 fun convert(amount: Double, from: String, to: String, rates: List<Fx>): Double? {
@@ -348,11 +355,11 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val openExchangeRates = Retrofit.Builder()
-            .baseUrl("https://openexchangerates.org/api/")
+        val hexarate = Retrofit.Builder()
+            .baseUrl("https://hexarate.paikama.co/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(OpenExchangeRatesApi::class.java)
+            .create(HexarateApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -380,7 +387,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(nbu, openExchangeRates, binance)
+                    MainScreen(nbu, hexarate, binance)
                 }
             }
         }
@@ -391,7 +398,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     nbu: NbuApi,
-    openExchangeRates: OpenExchangeRatesApi,
+    hexarate: HexarateApi,
     binance: BinanceApi
 ) {
     val context = LocalContext.current
@@ -474,26 +481,24 @@ fun MainScreen(
 
                         "EUR" -> {
                             try {
-                                val response = openExchangeRates.load(
-                                    appId = OPEN_EXCHANGE_RATES_APP_ID,
-                                    base = "EUR",
-                                    symbols = "USD,EUR,PLN,UAH,ALL"
+                                val response = hexarate.loadBatch(
+                                    pairs = "USD:UAH,USD:EUR,USD:PLN,USD:ALL"
                                 )
-                                Log.d("EasyChange", "OpenExchangeRates: ${response.rates.size} rates")
-                                response.rates.forEach { (code, rate) ->
-                                    Log.d("EasyChange", "OER rate: $code = $rate")
+                                Log.d("EasyChange", "Hexarate: status=${response.status_code}")
+                                response.data.results.forEach { rate ->
+                                    Log.d("EasyChange", "Hexarate rate: ${rate.base}/${rate.target} = ${rate.mid}")
                                 }
                                 
-                                newRates = response.rates.map { entry ->
-                                    Fx(entry.key, "EUR", null, null, entry.value)
-                                }
-                                Log.d("EasyChange", "OER parsed: ${newRates.size} rates")
+                                newRates = response.data.results
+                                    .filter { it.mid != null }
+                                    .map { Fx(it.target, it.base, null, null, it.mid!!) }
+                                Log.d("EasyChange", "Hexarate parsed: ${newRates.size} rates")
                                 newRates.forEach { fx ->
-                                    Log.d("EasyChange", "Parsed: ${fx.base}/EUR = ${fx.mid}")
+                                    Log.d("EasyChange", "Parsed: ${fx.base}/${fx.quote} = ${fx.mid}")
                                 }
                                 newExchangers = emptyList()
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "OpenExchangeRates error: ${e.message}", e)
+                                Log.e("EasyChange", "Hexarate error: ${e.message}", e)
                                 newRates = cache[cacheKey]?.rates ?: emptyList()
                                 newExchangers = emptyList()
                             }
@@ -615,14 +620,29 @@ fun MainScreen(
         }
     }
 
-    LaunchedEffect(source, kantorCity) { refresh() }
+    // При старті - завантажуємо NBU
+    LaunchedEffect(Unit) {
+        Log.d("EasyChange", "App started - loading NBU")
+        if (cache["NBU"] == null) {
+            source = "NBU"
+            refresh(force = true)
+        }
+    }
+    
+    // При зміні джерела - завантажуємо це джерело
+    LaunchedEffect(source, kantorCity) {
+        if (source != "NBU" || cache["NBU"] == null) {
+            Log.d("EasyChange", "Source changed to: $source")
+            refresh()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Верхня частина - не скролиться
         Column(modifier = Modifier.padding(16.dp)) {
             // Кнопки джерел
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Верхній ряд - NBU і EUR (OpenExchangeRates)
+                // Верхній ряд - NBU і EUR (Hexarate)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -809,7 +829,7 @@ fun MainScreen(
                 
                 CURRENCIES.filter { curr ->
                     curr.code != baseCurrency && 
-                    // ALL показуємо тільки для OpenExchangeRates (EUR)
+                    // ALL показуємо тільки для Hexarate (EUR)
                     (curr.code != "ALL" || source == "EUR")
                 }.forEach { curr ->
                     // Для KANTOR UAH потрібна особлива логіка
