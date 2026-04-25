@@ -84,22 +84,16 @@ data class NbuDto(
     val exchangedate: String? = null
 )
 
-interface NbpApi {
-    @GET("api/exchangerates/tables/a/?format=json")
-    suspend fun load(): List<NbpTable>
+interface FrankfurterApi {
+    @GET("latest")
+    suspend fun load(@Query("from") from: String = "EUR"): FrankfurterResponse
 }
 
-data class NbpTable(
-    val table: String,
-    val no: String,
-    val effectiveDate: String,
-    val rates: List<NbpRate>
-)
-
-data class NbpRate(
-    val currency: String,
-    val code: String,
-    val mid: Double
+data class FrankfurterResponse(
+    val amount: Double,
+    val base: String,
+    val date: String,
+    val rates: Map<String, Double>
 )
 
 interface BinanceApi {
@@ -351,11 +345,11 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val nbp = Retrofit.Builder()
-            .baseUrl("https://api.nbp.pl/")
+        val frankfurter = Retrofit.Builder()
+            .baseUrl("https://api.frankfurter.app/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(NbpApi::class.java)
+            .create(FrankfurterApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -413,7 +407,6 @@ fun MainScreen(
     var ethPrice by remember { mutableStateOf<Double?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var lastUpdate by remember { mutableStateOf<String?>(null) }
-    var showCurrencyPicker by remember { mutableStateOf(false) }
     var showCityPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     
@@ -476,22 +469,17 @@ fun MainScreen(
                             }
                         }
 
-                        "NBP" -> {
+                        "EUR" -> {
                             try {
-                                val response = nbp.load()
-                                Log.d("EasyChange", "NBP: ${response.size} tables")
+                                val response = frankfurter.load(from = "EUR")
+                                Log.d("EasyChange", "Frankfurter: ${response.rates.size} rates")
                                 
-                                if (response.isNotEmpty()) {
-                                    newRates = response[0].rates.map { rate ->
-                                        Fx(rate.code, "PLN", null, null, rate.mid)
-                                    }
-                                    newExchangers = emptyList()
-                                } else {
-                                    newRates = cache[cacheKey]?.rates ?: emptyList()
-                                    newExchangers = emptyList()
+                                newRates = response.rates.map { (code, rate) ->
+                                    Fx(code, "EUR", null, null, rate)
                                 }
+                                newExchangers = emptyList()
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "NBP error: ${e.message}", e)
+                                Log.e("EasyChange", "Frankfurter error: ${e.message}", e)
                                 newRates = cache[cacheKey]?.rates ?: emptyList()
                                 newExchangers = emptyList()
                             }
@@ -620,7 +608,7 @@ fun MainScreen(
         Column(modifier = Modifier.padding(16.dp)) {
             // Кнопки джерел
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Верхній ряд - NBU і NBP
+                // Верхній ряд - NBU і EUR (Frankfurter)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -643,19 +631,19 @@ fun MainScreen(
                     }
                     
                     Button(
-                        onClick = { source = "NBP" },
+                        onClick = { source = "EUR" },
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (source == "NBP") 
+                            containerColor = if (source == "EUR") 
                                 MaterialTheme.colorScheme.primary 
                             else 
                                 MaterialTheme.colorScheme.secondary
                         )
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-                            Text("NBP", fontSize = 13.sp)
-                            Text("nbp.pl", fontSize = 8.sp)
+                            Text("EUR", fontSize = 13.sp)
+                            Text("frankfurter.app", fontSize = 8.sp)
                         }
                     }
                 }
@@ -754,9 +742,8 @@ fun MainScreen(
                     label = { Text(baseCurrency) },
                     leadingIcon = {
                         val curr = CURRENCIES.find { it.code == baseCurrency }
-                        IconButton(onClick = { showCurrencyPicker = true }) {
-                            Text(curr?.flag ?: "🏳", fontSize = 24.sp)
-                        }
+                        // Прапор тільки інформаційно, без tap
+                        Text(curr?.flag ?: "🏳", fontSize = 24.sp, modifier = Modifier.padding(start = 12.dp))
                     },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
@@ -806,7 +793,11 @@ fun MainScreen(
                     Log.d("UI", "Rate sample: ${r.base}/${r.quote} = mid:${r.mid}, buy:${r.buy}, sell:${r.sell}")
                 }
                 
-                CURRENCIES.filter { it.code != baseCurrency }.forEach { curr ->
+                CURRENCIES.filter { curr ->
+                    curr.code != baseCurrency && 
+                    // ALL показуємо тільки для Frankfurter (EUR)
+                    (curr.code != "ALL" || source == "EUR")
+                }.forEach { curr ->
                     // Для KANTOR UAH потрібна особлива логіка
                     val isKantorUah = source == "KANTOR" && baseCurrency != "UAH" && curr.code == "UAH"
                     
@@ -850,8 +841,14 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 3.dp)
-                            .clickable(enabled = source == "KANTOR" && exchangers.isNotEmpty()) {
-                                expandedCurrency = if (expandedCurrency == curr.code) null else curr.code
+                            .clickable {
+                                // Tap на картку → змінює базову валюту
+                                baseCurrency = curr.code
+                                saveCurrency(curr.code)  // Зберігаємо вибір
+                                // Також розгортає exchangers для KANTOR (якщо є)
+                                if (source == "KANTOR" && exchangers.isNotEmpty()) {
+                                    expandedCurrency = if (expandedCurrency == curr.code) null else curr.code
+                                }
                             },
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface,
@@ -1065,7 +1062,7 @@ fun MainScreen(
                                         }
                                     }  // Закриваємо else для не-UAH валют
                                 } else {
-                                    // Для NBU/NBP - як раніше
+                                    // Для NBU/EUR - як раніше
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
@@ -1277,33 +1274,5 @@ fun MainScreen(
     }
 
     // Діалог вибору валюти
-    if (showCurrencyPicker) {
-        AlertDialog(
-            onDismissRequest = { showCurrencyPicker = false },
-            title = { Text("Оберіть базову валюту") },
-            text = {
-                Column {
-                    CURRENCIES.forEach { curr ->
-                        TextButton(
-                            onClick = {
-                                saveCurrency(curr.code)
-                                showCurrencyPicker = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                "${curr.flag} ${curr.code} - ${curr.name}",
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCurrencyPicker = false }) {
-                    Text("Закрити")
-                }
-            }
-        )
-    }
+    // Діалог вибору валюти видалено - тепер валюта змінюється по tap на картку
 }
