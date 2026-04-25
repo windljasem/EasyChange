@@ -84,15 +84,13 @@ data class NbuDto(
     val exchangedate: String? = null
 )
 
-interface FrankfurterApi {
-    @GET("latest")
-    suspend fun load(@Query("from") from: String = "EUR"): FrankfurterResponse
+interface XeApi {
+    @GET("v1/currencies/")
+    suspend fun load(@Query("base") base: String = "EUR"): XeResponse
 }
 
-data class FrankfurterResponse(
-    val amount: Double,
-    val base: String,
-    val date: String,
+data class XeResponse(
+    val from: String,
     val rates: Map<String, Double>
 )
 
@@ -345,11 +343,11 @@ class MainActivity : ComponentActivity() {
             .build()
             .create(NbuApi::class.java)
 
-        val frankfurter = Retrofit.Builder()
-            .baseUrl("https://api.frankfurter.app/")
+        val xe = Retrofit.Builder()
+            .baseUrl("https://xecd.xe.com/")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(FrankfurterApi::class.java)
+            .create(XeApi::class.java)
 
         val binance = Retrofit.Builder()
             .baseUrl("https://api.binance.com/")
@@ -377,7 +375,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(nbu, frankfurter, binance)
+                    MainScreen(nbu, xe, binance)
                 }
             }
         }
@@ -388,7 +386,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     nbu: NbuApi,
-    frankfurter: FrankfurterApi,
+    xe: XeApi,
     binance: BinanceApi
 ) {
     val context = LocalContext.current
@@ -471,15 +469,15 @@ fun MainScreen(
 
                         "EUR" -> {
                             try {
-                                val response = frankfurter.load(from = "EUR")
-                                Log.d("EasyChange", "Frankfurter: ${response.rates.size} rates")
+                                val response = xe.load(base = "EUR")
+                                Log.d("EasyChange", "XE: ${response.rates.size} rates")
                                 
                                 newRates = response.rates.map { entry ->
                                     Fx(entry.key, "EUR", null, null, entry.value)
                                 }
                                 newExchangers = emptyList()
                             } catch (e: Exception) {
-                                Log.e("EasyChange", "Frankfurter error: ${e.message}", e)
+                                Log.e("EasyChange", "XE error: ${e.message}", e)
                                 newRates = cache[cacheKey]?.rates ?: emptyList()
                                 newExchangers = emptyList()
                             }
@@ -608,7 +606,7 @@ fun MainScreen(
         Column(modifier = Modifier.padding(16.dp)) {
             // Кнопки джерел
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                // Верхній ряд - NBU і EUR (Frankfurter)
+                // Верхній ряд - NBU і EUR (XE)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -643,7 +641,7 @@ fun MainScreen(
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                             Text("EUR", fontSize = 13.sp)
-                            Text("frankfurter.app", fontSize = 8.sp)
+                            Text("xe.com", fontSize = 8.sp)
                         }
                     }
                 }
@@ -795,7 +793,7 @@ fun MainScreen(
                 
                 CURRENCIES.filter { curr ->
                     curr.code != baseCurrency && 
-                    // ALL показуємо тільки для Frankfurter (EUR)
+                    // ALL показуємо тільки для XE (EUR)
                     (curr.code != "ALL" || source == "EUR")
                 }.forEach { curr ->
                     // Для KANTOR UAH потрібна особлива логіка
