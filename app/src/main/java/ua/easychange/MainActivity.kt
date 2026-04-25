@@ -372,12 +372,11 @@ class MainActivity : ComponentActivity() {
                     onSurface = Color(0xFF263238),      // Темно-сірий текст на картках
                     onSurfaceVariant = Color(0xFF546E7A) // Сірий для вторинного тексту
                 )
-            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(nbu, nbp, binance)
+                    MainScreen(nbu, frankfurter, binance)
                 }
             }
         }
@@ -388,7 +387,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     nbu: NbuApi,
-    nbp: NbpApi,
+    frankfurter: FrankfurterApi,
     binance: BinanceApi
 ) {
     val context = LocalContext.current
@@ -474,8 +473,8 @@ fun MainScreen(
                                 val response = frankfurter.load(from = "EUR")
                                 Log.d("EasyChange", "Frankfurter: ${response.rates.size} rates")
                                 
-                                newRates = response.rates.map { (code, rate) ->
-                                    Fx(code, "EUR", null, null, rate)
+                                newRates = response.rates.map { entry ->
+                                    Fx(entry.key, "EUR", null, null, entry.value)
                                 }
                                 newExchangers = emptyList()
                             } catch (e: Exception) {
