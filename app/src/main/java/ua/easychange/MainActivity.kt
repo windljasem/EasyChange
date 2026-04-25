@@ -26,6 +26,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
+import retrofit2.http.Path
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -85,26 +86,23 @@ data class NbuDto(
 )
 
 interface HexarateApi {
-    @GET("api/rates/batch")
-    suspend fun loadBatch(
-        @Query("pairs") pairs: String = "USD:UAH,USD:EUR,USD:PLN,USD:ALL"
-    ): HexarateResponse
+    @GET("api/rates/{from}/{to}/latest")
+    suspend fun getRate(
+        @Path("from") from: String,
+        @Path("to") to: String
+    ): HexarateLatestResponse
 }
 
-data class HexarateResponse(
+data class HexarateLatestResponse(
     val status_code: Int,
-    val data: HexarateData
+    val data: HexarateLatestData
 )
 
-data class HexarateData(
-    val date: String,
-    val results: List<HexarateRate>
-)
-
-data class HexarateRate(
+data class HexarateLatestData(
     val base: String,
     val target: String,
-    val mid: Double?
+    val mid: Double,
+    val unit: Int
 )
 
 interface BinanceApi {
@@ -481,21 +479,50 @@ fun MainScreen(
 
                         "EUR" -> {
                             try {
-                                val response = hexarate.loadBatch(
-                                    pairs = "USD:UAH,USD:EUR,USD:PLN,USD:ALL"
-                                )
-                                Log.d("EasyChange", "Hexarate: status=${response.status_code}")
-                                response.data.results.forEach { rate ->
-                                    Log.d("EasyChange", "Hexarate rate: ${rate.base}/${rate.target} = ${rate.mid}")
+                                val rates = mutableListOf<Fx>()
+                                
+                                // Запит 1: USD → UAH
+                                try {
+                                    val uahResponse = hexarate.getRate("USD", "UAH")
+                                    Log.d("EasyChange", "Hexarate USD→UAH: ${uahResponse.data.mid}")
+                                    rates.add(Fx("UAH", "USD", null, null, uahResponse.data.mid))
+                                } catch (e: Exception) {
+                                    Log.e("EasyChange", "Hexarate USD→UAH failed: ${e.message}")
                                 }
                                 
-                                newRates = response.data.results
-                                    .filter { it.mid != null }
-                                    .map { Fx(it.target, it.base, null, null, it.mid!!) }
-                                Log.d("EasyChange", "Hexarate parsed: ${newRates.size} rates")
-                                newRates.forEach { fx ->
+                                // Запит 2: USD → EUR
+                                try {
+                                    val eurResponse = hexarate.getRate("USD", "EUR")
+                                    Log.d("EasyChange", "Hexarate USD→EUR: ${eurResponse.data.mid}")
+                                    rates.add(Fx("EUR", "USD", null, null, eurResponse.data.mid))
+                                } catch (e: Exception) {
+                                    Log.e("EasyChange", "Hexarate USD→EUR failed: ${e.message}")
+                                }
+                                
+                                // Запит 3: USD → PLN
+                                try {
+                                    val plnResponse = hexarate.getRate("USD", "PLN")
+                                    Log.d("EasyChange", "Hexarate USD→PLN: ${plnResponse.data.mid}")
+                                    rates.add(Fx("PLN", "USD", null, null, plnResponse.data.mid))
+                                } catch (e: Exception) {
+                                    Log.e("EasyChange", "Hexarate USD→PLN failed: ${e.message}")
+                                }
+                                
+                                // Запит 4: USD → ALL
+                                try {
+                                    val allResponse = hexarate.getRate("USD", "ALL")
+                                    Log.d("EasyChange", "Hexarate USD→ALL: ${allResponse.data.mid}")
+                                    rates.add(Fx("ALL", "USD", null, null, allResponse.data.mid))
+                                } catch (e: Exception) {
+                                    Log.e("EasyChange", "Hexarate USD→ALL failed: ${e.message}")
+                                }
+                                
+                                Log.d("EasyChange", "Hexarate total parsed: ${rates.size} rates")
+                                rates.forEach { fx ->
                                     Log.d("EasyChange", "Parsed: ${fx.base}/${fx.quote} = ${fx.mid}")
                                 }
+                                
+                                newRates = rates
                                 newExchangers = emptyList()
                             } catch (e: Exception) {
                                 Log.e("EasyChange", "Hexarate error: ${e.message}", e)
@@ -677,7 +704,7 @@ fun MainScreen(
                     ) {
                         Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
                             Text("EUR", fontSize = 13.sp)
-                            Text("openexchangerates.org", fontSize = 8.sp)
+                            Text("hexarate.paikama.co", fontSize = 8.sp)
                         }
                     }
                 }
