@@ -486,6 +486,8 @@ fun MainScreen(
                                     val uahResponse = hexarate.getRate("USD", "UAH")
                                     Log.d("EasyChange", "Hexarate USD→UAH: ${uahResponse.data.mid}")
                                     rates.add(Fx("UAH", "USD", null, null, uahResponse.data.mid))
+                                    // Обернена пара
+                                    rates.add(Fx("USD", "UAH", null, null, 1.0 / uahResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→UAH failed: ${e.message}")
                                 }
@@ -495,6 +497,8 @@ fun MainScreen(
                                     val eurResponse = hexarate.getRate("USD", "EUR")
                                     Log.d("EasyChange", "Hexarate USD→EUR: ${eurResponse.data.mid}")
                                     rates.add(Fx("EUR", "USD", null, null, eurResponse.data.mid))
+                                    // Обернена пара
+                                    rates.add(Fx("USD", "EUR", null, null, 1.0 / eurResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→EUR failed: ${e.message}")
                                 }
@@ -504,6 +508,8 @@ fun MainScreen(
                                     val plnResponse = hexarate.getRate("USD", "PLN")
                                     Log.d("EasyChange", "Hexarate USD→PLN: ${plnResponse.data.mid}")
                                     rates.add(Fx("PLN", "USD", null, null, plnResponse.data.mid))
+                                    // Обернена пара
+                                    rates.add(Fx("USD", "PLN", null, null, 1.0 / plnResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→PLN failed: ${e.message}")
                                 }
@@ -513,11 +519,13 @@ fun MainScreen(
                                     val allResponse = hexarate.getRate("USD", "ALL")
                                     Log.d("EasyChange", "Hexarate USD→ALL: ${allResponse.data.mid}")
                                     rates.add(Fx("ALL", "USD", null, null, allResponse.data.mid))
+                                    // Обернена пара
+                                    rates.add(Fx("USD", "ALL", null, null, 1.0 / allResponse.data.mid))
                                 } catch (e: Exception) {
                                     Log.e("EasyChange", "Hexarate USD→ALL failed: ${e.message}")
                                 }
                                 
-                                Log.d("EasyChange", "Hexarate total parsed: ${rates.size} rates")
+                                Log.d("EasyChange", "Hexarate total parsed: ${rates.size} rates (с обернениями)")
                                 rates.forEach { fx ->
                                     Log.d("EasyChange", "Parsed: ${fx.base}/${fx.quote} = ${fx.mid}")
                                 }
