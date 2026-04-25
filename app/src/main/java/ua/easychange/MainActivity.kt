@@ -107,8 +107,7 @@ val CURRENCIES = listOf(
     CurrencyInfo("USD", "🇺🇸", "Долар США"),
     CurrencyInfo("EUR", "🇪🇺", "Євро"),
     CurrencyInfo("PLN", "🇵🇱", "Злотий"),
-    CurrencyInfo("GBP", "🇬🇧", "Фунт"),
-    CurrencyInfo("ALL", "🇦🇱", "Лек")  // Албанський лек - відображається якщо є в джерелі
+    CurrencyInfo("ALL", "🇦🇱", "Лек")
 )
 
 val KANTOR_CITIES = listOf(
@@ -225,7 +224,7 @@ suspend fun fetchKantorData(city: String): Pair<List<Fx>, List<KantorExchanger>>
             val rates = mutableListOf<Fx>()
             
             // Паттерн: USD + два числа поруч (42.31 та 42.69)
-            val pattern = """(USD|EUR|PLN|GBP|ALL)[^0-9]+([\d.]+)[^0-9]+([\d.]+)""".toRegex()
+            val pattern = """(USD|EUR|PLN|ALL)[^0-9]+([\d.]+)[^0-9]+([\d.]+)""".toRegex()
             
             val allMatches = pattern.findAll(html).toList()
             Log.d("KANTOR", "Found ${allMatches.size} currency patterns in HTML")
@@ -471,9 +470,16 @@ fun MainScreen(
                             try {
                                 val response = xe.load(base = "EUR")
                                 Log.d("EasyChange", "XE: ${response.rates.size} rates")
+                                response.rates.forEach { (code, rate) ->
+                                    Log.d("EasyChange", "XE rate: $code = $rate")
+                                }
                                 
                                 newRates = response.rates.map { entry ->
                                     Fx(entry.key, "EUR", null, null, entry.value)
+                                }
+                                Log.d("EasyChange", "XE parsed: ${newRates.size} rates")
+                                newRates.forEach { fx ->
+                                    Log.d("EasyChange", "Parsed: ${fx.base}/EUR = ${fx.mid}")
                                 }
                                 newExchangers = emptyList()
                             } catch (e: Exception) {
