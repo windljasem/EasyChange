@@ -372,6 +372,7 @@ class MainActivity : ComponentActivity() {
                     onSurface = Color(0xFF263238),      // Темно-сірий текст на картках
                     onSurfaceVariant = Color(0xFF546E7A) // Сірий для вторинного тексту
                 )
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -1271,7 +1272,4 @@ fun MainScreen(
             Spacer(Modifier.height(16.dp))
         }
     }
-
-    // Діалог вибору валюти
-    // Діалог вибору валюти видалено - тепер валюта змінюється по tap на картку
 }
